@@ -9,3 +9,6 @@ a.json
 .env
 
 .DS_store
+
+cdk.out/*
+node_modules/*
