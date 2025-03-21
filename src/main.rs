@@ -24,7 +24,6 @@ pub mod executors;
 pub mod strategies;
 
 static POLL_INTERVAL_SECS: u64 = 60 * 5;
-pub const CHAIN_ID: u64 = 1337;
 
 /// CLI Options.
 #[derive(Parser, Debug)]
@@ -49,6 +48,9 @@ pub struct Args {
 
     #[arg(long)]
     pub liquidator_address: String,
+
+    #[arg(long)]
+    pub chain_id: u64,
 }
 
 #[tokio::main]
@@ -76,7 +78,7 @@ async fn main() -> Result<()> {
         .private_key
         .parse::<LocalWallet>()
         .unwrap()
-        .with_chain_id(CHAIN_ID);
+        .with_chain_id(args.chain_id);
     let address = wallet.address();
 
     let archive_provider = Arc::new(archive_provider.nonce_manager(address).with_signer(wallet.clone()));
@@ -92,7 +94,7 @@ async fn main() -> Result<()> {
 
     let config = Config {
         bid_percentage: args.bid_percentage,
-        chain_id: CHAIN_ID,
+        chain_id: args.chain_id,
     };
 
     let strategy = AaveStrategy::new(
@@ -111,6 +113,7 @@ async fn main() -> Result<()> {
     });
 
     engine.add_executor(Box::new(executor));
+    info!("Starting engine");
     // Start engine.
     match engine.run().await {
         Ok(mut set) => {

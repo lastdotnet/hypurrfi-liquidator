@@ -76,7 +76,7 @@ fn get_deployment_config(deployment: Deployment) -> DeploymentConfig {
         Deployment::HYFI => DeploymentConfig {
             state_cache_file: "borrowers-hyperevm-mainnet.json".to_string(),
             pool_address: Address::from_str("0xceCcE0EB9DD2Ef7996e01e25DD70e461F918A14b").unwrap(),
-            pool_data_provider: Address::from_str("0x7b883191011AEAe40581d3Fa1B112413808C9c00").unwrap(),
+            pool_data_provider: Address::from_str("0x895C799a5bbdCb63B80bEE5BD94E7b9138D977d6").unwrap(),
             oracle_address: Address::from_str("0x9BE2ac1ff80950DCeb816842834930887249d9A8").unwrap(),
             weth_address: Address::from_str("0x5555555555555555555555555555555555555555").unwrap(),
             multicall3_address: Address::from_str("0xa66aeb1c0a579ad95ba3940d18faad02c368a383").unwrap(),
@@ -217,10 +217,10 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
         info!("Best op - profit: {}", op.profit_eth);
 
-        // if op.profit_eth < I256::from(0) {
-        //     info!("No profitable ops, passing");
-        //     return vec![];
-        // }
+        if op.profit_eth < I256::from(0) {
+            info!("No profitable ops, passing");
+            return vec![];
+        }
 
         // Check if user has sufficient debt token balance
         let has_balance = match self.check_user_balance(op.debt, op.debt_to_cover).await {
@@ -265,16 +265,19 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
     // for all known borrowers, return a sorted set of those with health factor < 1
     async fn get_underwater_borrowers(&mut self) -> Result<Vec<(Address, U256)>> {
+        info!("Getting underwater borrowers");
         let pool = Pool::<M>::new(self.config.pool_address, self.write_client.clone());
 
         let mut underwater_borrowers = Vec::new();
 
         // call pool.getUserAccountData(user) for each borrower
+        info!("Getting multicall");
         let mut multicall = Multicall::new(
             self.write_client.clone(),
-            Some(H160::from_str(self.config.multicall3_address.to_string().as_str())?),
+            Some(self.config.multicall3_address.into()), 
         )
         .await?;
+        info!("Getting borrowers");
         let borrowers: Vec<&Borrower> = self
             .borrowers
             .values()
@@ -290,6 +293,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
             let result: Vec<(U256, U256, U256, U256, U256, U256)> = multicall.call_array().await?;
             for (borrower, (_, _, _, _, _, health_factor)) in zip(chunk, result) {
+                info!("Checking borrower {:?}", borrower.address);
                 if health_factor.lt(&U256::from_dec_str("1000000000000000000").unwrap()) {
                     info!(
                         "Found underwater borrower {:?} -  healthFactor: {}",
@@ -491,6 +495,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
                 .allowance(self.liquidator, self.config.pool_address)
                 .call()
                 .await?;
+            info!("approve token: {:?}", token_address);
+            info!("allowance: {:?}", allowance);
             if allowance == U256::zero() {
                 // TODO remove unwrap once we figure out whats broken
                 liquidator
@@ -510,8 +516,10 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
     }
 
     async fn update_token_configs(&mut self) -> Result<()> {
+        info!("Updating token configs");
         let pool_data =
             IPoolDataProvider::<M>::new(self.config.pool_data_provider, self.archive_client.clone());
+        info!("pool_data: {:?}", pool_data);
         let all_tokens = pool_data.get_all_reserves_tokens().await?;
         let all_a_tokens = pool_data.get_all_a_tokens().await?;
         info!("all_tokens: {:?}", all_tokens);

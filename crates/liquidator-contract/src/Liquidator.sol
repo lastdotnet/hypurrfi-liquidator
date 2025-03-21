@@ -18,7 +18,8 @@ uint160 constant MIN_SQRT_RATIO = 4295128739;
 uint160 constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
 contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3SwapCallback {
-    event Test(uint256 amountIn);
+    event LiquidatorAdded(address indexed liquidator);
+    event LiquidatorRemoved(address indexed liquidator);
     struct SwapCallbackData {
         bytes path;
         address collateralAsset;
@@ -28,9 +29,9 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
         uint256 amountToPay;
     }
 
-    address private constant uniswapV3Factory = 0x22a9B82A6c3D2BFB68F324B2e8367f346Dd6f32a;
-    address private constant kittenPairFactory = 0xDa12F450580A4cc485C3b501BAB7b0B3cbc3B31B;
-    IPool public constant pool = IPool(0x32467b43BFa67273FC7dDda0999Ee9A12F2AaA08);
+    address public constant uniswapV3Factory = 0xB1c0fa0B789320044A6F623cFe5eBda9562602E3;
+    address public constant kittenPairFactory = 0xDa12F450580A4cc485C3b501BAB7b0B3cbc3B31B;
+    IPool public constant pool = IPool(0xceCcE0EB9DD2Ef7996e01e25DD70e461F918A14b);
 
     IKittenPair private activeKittenPair;
 
@@ -45,10 +46,12 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
 
     function addLiquidator(address _liquidator) external onlyOwner {
         isLiquidator[_liquidator] = true;
+        emit LiquidatorAdded(_liquidator);
     }
 
     function removeLiquidator(address _liquidator) external onlyOwner {
         isLiquidator[_liquidator] = false;
+        emit LiquidatorRemoved(_liquidator);
     }
 
     /// @notice Performs a liquidation using a flash swap
@@ -199,7 +202,7 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
 
     /// @notice Approve max ERC-20 allowance to Aave pool to save gas and not have to approve every liquidation
     /// @param token address of ERC-20 to approve
-    function approvePool(address token) external onlyOwner {
+    function approvePool(address token) external onlyOwnerOrLiquidator {
         ERC20(token).approve(address(pool), type(uint256).max);
     }
 
