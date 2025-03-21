@@ -17,7 +17,8 @@ uint160 constant MIN_SQRT_RATIO = 4295128739;
 /// @dev The maximum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MAX_TICK)
 uint160 constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
-contract Liquidator is Owned(msg.sender), IUniswapV3SwapCallback, IKittenswapSwapCallback {
+contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3SwapCallback {
+    event Test(uint256 amountIn);
     struct SwapCallbackData {
         bytes path;
         address collateralAsset;
@@ -33,7 +34,22 @@ contract Liquidator is Owned(msg.sender), IUniswapV3SwapCallback, IKittenswapSwa
 
     IKittenPair private activeKittenPair;
 
+    mapping(address => bool) public isLiquidator;
+
     constructor() {}
+
+    modifier onlyOwnerOrLiquidator() {
+        require(msg.sender == owner || isLiquidator[msg.sender], "Only owner or liquidator can call this function");
+        _;
+    }
+
+    function addLiquidator(address _liquidator) external onlyOwner {
+        isLiquidator[_liquidator] = true;
+    }
+
+    function removeLiquidator(address _liquidator) external onlyOwner {
+        isLiquidator[_liquidator] = false;
+    }
 
     /// @notice Performs a liquidation using a flash swap
     /// @param collateralAsset address of the collateral asset to be liquidated
@@ -49,7 +65,7 @@ contract Liquidator is Owned(msg.sender), IUniswapV3SwapCallback, IKittenswapSwa
         uint256 debtToCover,
         bytes calldata swapPath,
         string calldata swapVenue
-    ) external onlyOwner returns (int256 collateralGain) {
+    ) external onlyOwnerOrLiquidator returns (int256 collateralGain) {
         uint256 collateralBalance = ERC20(collateralAsset).balanceOf(address(this));
 
         if (keccak256(abi.encodePacked(swapVenue)) == keccak256(abi.encodePacked("kittenswap"))) {
@@ -88,8 +104,7 @@ contract Liquidator is Owned(msg.sender), IUniswapV3SwapCallback, IKittenswapSwa
                 pair: address(activeKittenPair),
                 factory: address(kittenPairFactory),
                 amountOut: data.debtToCover,
-                tokenOut: tokenIn, // exact output swaps are reversed
-                stable: false // use volatile pairs for now
+                tokenOut: tokenIn // exact output swaps are reversed
             })
         );
 
@@ -206,4 +221,16 @@ contract Liquidator is Owned(msg.sender), IUniswapV3SwapCallback, IKittenswapSwa
         address p = PoolAddress.computeAddress(factory, poolKey);
         require(msg.sender == p, "invalid pool");
     }
+
+    // function testGetAmountIn() external {
+    //     uint256 amountOut = 1e18;
+    //     activeKittenPair = IKittenPair(0x7F5D1F93232702a951759a47A27dE08D35e9bbe8);
+    //     // 0x5555555555555555555555555555555555555555 for WHYPE
+    //     //0x94e8396e0869c9F2200760aF0621aFd240E1CF38 for wstHYPE
+    //     uint256 amountIn = KittenswapLib.getAmountIn(
+    //         KittenswapLib.GetAmountInArgs({pair: address(activeKittenPair), factory: address(kittenPairFactory), amountOut: amountOut, tokenOut: address(0x94e8396e0869c9F2200760aF0621aFd240E1CF38)})
+    //     );
+    //     emit GetAmountInTest(amountIn);
+    //     activeKittenPair = IKittenPair(address(0));
+    // }
 }
