@@ -15,11 +15,11 @@ RUN /root/.foundry/bin/forge build --root crates/liquidator-contract --force
 RUN cargo build --release
 
 # Runtime stage
-FROM --platform=linux/amd64 debian:bullseye-slim
+FROM --platform=linux/amd64 debian:bookworm-slim
 
 # Install SSL libraries and CA certificates
 RUN apt-get update && \
-    apt-get install -y openssl ca-certificates libssl1.1 && \
+    apt-get install -y openssl ca-certificates libssl3 && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
