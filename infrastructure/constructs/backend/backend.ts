@@ -72,8 +72,8 @@ export class Backend extends Construct {
       memoryLimitMiB: 2048,
       environment: {
         ...props.containerEnvironment,
-        BID_PERCENTAGE: "100",
-        DEPLOYMENT: "seashell",
+        BID_PERCENTAGE: props.containerEnvironment?.BID_PERCENTAGE ?? "100",
+        DEPLOYMENT: props.containerEnvironment?.DEPLOYMENT ?? "seashell",
       },
       secrets: {
         LIQUIDATOR_CONFIG: ecs.Secret.fromSecretsManager(liquidatorSecret),
@@ -85,9 +85,9 @@ export class Backend extends Construct {
         "--private-key",
         "${LIQUIDATOR_CONFIG.privateKey}",
         "--bid-percentage",
-        "100",
-        "--deployent",
-        "seashell",
+        "${BID_PERCENTAGE}",
+        "--deployment",
+        "${DEPLOYMENT}",
         "--liquidator-address",
         "${LIQUIDATOR_CONFIG.liquidatorAddress}",
       ],
@@ -106,7 +106,7 @@ export class Backend extends Construct {
       minHealthyPercent: 0,
       desiredCount: 1,
       circuitBreaker: {
-        rollback: true,
+        rollback: false,
       },
     });
   }
