@@ -60,3 +60,9 @@ forge bind --bindings-path ./crates/bindings-liquidator --root ./crates/liquidat
 ```bash
 forge bind --bindings-path ./crates/bindings-aave --root {path to aave-v3-core} --crate-name bindings-aave --overwrite
 ```
+
+## Generate borrowers file from ponder indexer
+
+```bash
+npx ts-node --project  ./tsconfig.json --prefer-ts-exts ./utils/generateBorrowersFile.ts
+```
