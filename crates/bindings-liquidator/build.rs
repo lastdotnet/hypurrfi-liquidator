@@ -9,7 +9,7 @@ fn main() {
     .expect("Could not instantiate Abigen")
     .generate()
     .expect("Could not generate bindings")
-    .write_to_file("./abi/liquidator.rs")    // Write to a file
+    .write_to_file("./src/liquidator.rs")    // Write to a file
     .expect("Could not write bindings to file");
 
     // Tell cargo to rerun this script if the ABI file changes

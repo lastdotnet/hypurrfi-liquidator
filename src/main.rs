@@ -31,7 +31,10 @@ pub const CHAIN_ID: u64 = 1337;
 pub struct Args {
     /// Ethereum node WS endpoint.
     #[arg(long)]
-    pub rpc: String,
+    pub archive_rpc: String,
+
+    #[arg(long)]
+    pub write_rpc: String,
 
     /// Private key for sending txs.
     #[arg(long)]
@@ -64,8 +67,10 @@ async fn main() -> Result<()> {
     println!("{:?}", args);
 
     // Set up ethers provider.
-    let rpc = Http::from_str(&args.rpc)?;
-    let provider = Provider::new(rpc);
+    let archive_rpc = Http::from_str(&args.archive_rpc)?;
+    let write_rpc = Http::from_str(&args.write_rpc)?;
+    let archive_provider = Provider::new(archive_rpc);
+    let write_provider = Provider::new(write_rpc);
 
     let wallet: LocalWallet = args
         .private_key
@@ -74,7 +79,8 @@ async fn main() -> Result<()> {
         .with_chain_id(CHAIN_ID);
     let address = wallet.address();
 
-    let provider = Arc::new(provider.nonce_manager(address).with_signer(wallet.clone()));
+    let archive_provider = Arc::new(archive_provider.nonce_manager(address).with_signer(wallet.clone()));
+    let write_provider = Arc::new(write_provider.nonce_manager(address).with_signer(wallet.clone()));
 
     // Set up engine.
     let mut engine: Engine<Event, Action> = Engine::default();
@@ -90,14 +96,15 @@ async fn main() -> Result<()> {
     };
 
     let strategy = AaveStrategy::new(
-        Arc::new(provider.clone()),
+        Arc::new(archive_provider.clone()),
+        Arc::new(write_provider.clone()),
         config,
         args.deployment,
-        args.liquidator_address,
+        args.liquidator_address
     );
     engine.add_strategy(Box::new(strategy));
 
-    let executor = Box::new(ProtectExecutor::new(provider.clone(), provider.clone()));
+    let executor = Box::new(ProtectExecutor::new(write_provider.clone(), write_provider.clone()));
 
     let executor = ExecutorMap::new(executor, |action| match action {
         Action::SubmitTx(tx) => Some(tx),

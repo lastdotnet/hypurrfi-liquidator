@@ -41,6 +41,7 @@ struct DeploymentConfig {
     oracle_address: Address,
     weth_address: Address,
     multicall3_address: Address,
+    swap_venue: String,
     creation_block: u64,
 }
 
@@ -68,6 +69,7 @@ fn get_deployment_config(deployment: Deployment) -> DeploymentConfig {
             oracle_address: Address::from_str("0x0E801D84Fa97b50751Dbf25036d067dCf18858bF").unwrap(),
             weth_address: Address::from_str("0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0").unwrap(),
             multicall3_address: Address::from_str("0x720472c8ce72c2A2D711333e064ABD3E6BbEAdd3").unwrap(),
+            swap_venue: "hyperswap".to_string(),
             creation_block: 0,
 
         },
@@ -78,6 +80,7 @@ fn get_deployment_config(deployment: Deployment) -> DeploymentConfig {
             oracle_address: Address::from_str("0x9BE2ac1ff80950DCeb816842834930887249d9A8").unwrap(),
             weth_address: Address::from_str("0x5555555555555555555555555555555555555555").unwrap(),
             multicall3_address: Address::from_str("0xa66aeb1c0a579ad95ba3940d18faad02c368a383").unwrap(),
+            swap_venue: "kittenswap".to_string(),
             creation_block: 82245,
         },
     }
@@ -116,7 +119,8 @@ pub struct TokenConfig {
 #[allow(dead_code)]
 pub struct AaveStrategy<M> {
     /// Ethers client.
-    client: Arc<M>,
+    archive_client: Arc<M>,
+    write_client: Arc<M>,
     /// Amount of profits to bid in gas
     bid_percentage: u64,
     last_block_number: u64,
@@ -129,13 +133,15 @@ pub struct AaveStrategy<M> {
 
 impl<M: Middleware + 'static> AaveStrategy<M> {
     pub fn new(
-        client: Arc<M>,
+        archive_client: Arc<M>,
+        write_client: Arc<M>,
         config: Config,
         deployment: Deployment,
         liquidator_address: String,
     ) -> Self {
         Self {
-            client,
+            archive_client,
+            write_client,
             bid_percentage: config.bid_percentage,
             last_block_number: 0,
             borrowers: HashMap::new(),
@@ -259,13 +265,13 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
     // for all known borrowers, return a sorted set of those with health factor < 1
     async fn get_underwater_borrowers(&mut self) -> Result<Vec<(Address, U256)>> {
-        let pool = Pool::<M>::new(self.config.pool_address, self.client.clone());
+        let pool = Pool::<M>::new(self.config.pool_address, self.write_client.clone());
 
         let mut underwater_borrowers = Vec::new();
 
         // call pool.getUserAccountData(user) for each borrower
         let mut multicall = Multicall::new(
-            self.client.clone(),
+            self.write_client.clone(),
             Some(H160::from_str(self.config.multicall3_address.to_string().as_str())?),
         )
         .await?;
@@ -334,7 +340,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
     // update known borrower state from last block to latest block
     async fn update_state(&mut self) -> Result<()> {
-        let latest_block = self.client.get_block_number().await?;
+        let latest_block = self.archive_client.get_block_number().await?;
         info!(
             "Updating state from block {} to {}",
             self.last_block_number, latest_block
@@ -417,7 +423,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
     // fetch all borrow events from the from_block to to_block
     async fn get_borrow_logs(&self, from_block: U64, to_block: U64) -> Result<Vec<BorrowFilter>> {
-        let pool = Pool::<M>::new(self.config.pool_address, self.client.clone());
+        let pool = Pool::<M>::new(self.config.pool_address, self.archive_client.clone());
 
         let mut res = Vec::new();
         for (i, start_block) in (from_block.as_u64()..to_block.as_u64())
@@ -445,7 +451,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
     // fetch all borrow events from the from_block to to_block
     async fn get_supply_logs(&self, from_block: U64, to_block: U64) -> Result<Vec<SupplyFilter>> {
-        let pool = Pool::<M>::new(self.config.pool_address, self.client.clone());
+        let pool = Pool::<M>::new(self.config.pool_address, self.archive_client.clone());
 
         let mut res = Vec::new();
         for start_block in
@@ -468,19 +474,19 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
     }
 
     async fn approve_tokens(&mut self) -> Result<()> {
-        let liquidator = Liquidator::new(self.liquidator, self.client.clone());
+        let liquidator = Liquidator::new(self.liquidator, self.write_client.clone());
 
         let mut nonce = self
-            .client
+            .write_client
             .get_transaction_count(
-                self.client
+                self.write_client
                     .default_sender()
                     .ok_or(anyhow!("No connected sender"))?,
                 None,
             )
             .await?;
         for token_address in self.tokens.keys() {
-            let token = IERC20::new(token_address.clone(), self.client.clone());
+            let token = IERC20::new(token_address.clone(), self.write_client.clone());
             let allowance = token
                 .allowance(self.liquidator, self.config.pool_address)
                 .call()
@@ -505,7 +511,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
     async fn update_token_configs(&mut self) -> Result<()> {
         let pool_data =
-            IPoolDataProvider::<M>::new(self.config.pool_data_provider, self.client.clone());
+            IPoolDataProvider::<M>::new(self.config.pool_data_provider, self.archive_client.clone());
         let all_tokens = pool_data.get_all_reserves_tokens().await?;
         let all_a_tokens = pool_data.get_all_a_tokens().await?;
         info!("all_tokens: {:?}", all_tokens);
@@ -565,7 +571,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
         info!("Found {} underwater borrowers", underwater.len());
         let pool_data =
-            IPoolDataProvider::<M>::new(self.config.pool_data_provider, self.client.clone());
+            IPoolDataProvider::<M>::new(self.config.pool_data_provider, self.write_client.clone());
 
         let mut best_bonus: I256 = I256::MIN;
         let mut best_op: Option<LiquidationOpportunity> = None;
@@ -641,12 +647,12 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
     async fn get_pool_state(&self) -> Result<PoolState> {
         let mut multicall = Multicall::<M>::new(
-            self.client.clone(),
+            self.write_client.clone(),
             Some(H160::from_str(self.config.multicall3_address.to_string().as_str())?),
         )
         .await?;
         let mut prices = HashMap::new();
-        let price_oracle = IAaveOracle::<M>::new(self.config.oracle_address, self.client.clone());
+        let price_oracle = IAaveOracle::<M>::new(self.config.oracle_address, self.write_client.clone());
 
         for token_address in self.tokens.keys() {
             multicall.add_call(price_oracle.get_asset_price(*token_address), false);
@@ -690,7 +696,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         let collateral_unit = U256::from(10).pow(collateral_config.decimals.into());
         let debt_unit = U256::from(10).pow(debt_config.decimals.into());
         let liquidation_bonus = collateral_config.liquidation_bonus;
-        let a_token = IERC20::new(collateral_config.a_address.clone(), self.client.clone());
+        let a_token = IERC20::new(collateral_config.a_address.clone(), self.write_client.clone());
 
         let (_, stable_debt, variable_debt, _, _, _, _, _, _) = pool_data
             .get_user_reserve_data(*debt_address, *borrower_address)
@@ -747,7 +753,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             op.borrower, op.collateral, op.debt, op.debt_to_cover, op.profit_eth
         );
 
-        let liquidator = Liquidator::new(self.liquidator, self.client.clone());
+        let liquidator = Liquidator::new(self.liquidator, self.write_client.clone());
 
         let swap_path = self.get_swap_path(&op.collateral, &op.debt)?;
 
@@ -760,10 +766,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             op.debt,
             op.borrower,
             op.debt_to_cover,
-            op.collateral_to_liquidate,
-            self.liquidator,
-            true,
             Bytes::from(swap_path),
+            self.config.swap_venue.clone(),
         );
 
         debug!("Liquidation op contract call: {:?}", contract_call);
@@ -780,8 +784,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
     }
 
     async fn check_user_balance(&self, token: Address, amount: U256) -> Result<bool> {
-        let token_contract = IERC20::new(token, self.client.clone());
-        let user = self.client.default_sender()
+        let token_contract = IERC20::new(token, self.write_client.clone());
+        let user = self.write_client.default_sender()
             .ok_or(anyhow!("No default sender configured"))?;
         
         let balance = token_contract.balance_of(user).await?;
