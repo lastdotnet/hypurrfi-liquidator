@@ -17,6 +17,11 @@ RUN cargo build --release
 # Runtime stage
 FROM --platform=linux/amd64 debian:bullseye-slim
 
+# Install SSL libraries and CA certificates
+RUN apt-get update && \
+    apt-get install -y openssl ca-certificates libssl1.1 && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy the binary from builder
