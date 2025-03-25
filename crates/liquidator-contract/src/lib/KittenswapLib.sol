@@ -9,10 +9,10 @@ library KittenswapLib {
     event Test(uint256 amountIn);
 
     struct Metadata {
-        uint decimals0;
-        uint decimals1;
-        uint reserve0;
-        uint reserve1;
+        uint256 decimals0;
+        uint256 decimals1;
+        uint256 reserve0;
+        uint256 reserve1;
         bool stable;
         address token0;
         address token1;
@@ -21,8 +21,15 @@ library KittenswapLib {
     struct GetAmountInArgs {
         address pair;
         address factory;
-        uint amountOut;
+        uint256 amountOut;
         address tokenOut;
+    }
+
+    struct GetAmountOutArgs {
+        address pair;
+        address factory;
+        uint256 amountIn;
+        address tokenIn;
     }
 
     struct GetXArgs {
@@ -42,9 +49,7 @@ library KittenswapLib {
         uint256 precision1;
     }
 
-    function getAmountIn(
-        GetAmountInArgs memory args
-    ) internal view returns (uint256) {
+    function getAmountIn(GetAmountInArgs memory args) internal view returns (uint256) {
         Metadata memory metadata;
 
         (
@@ -63,21 +68,19 @@ library KittenswapLib {
         // console.log("before fee:", amountIn);
 
         // Now account for the fee and adjust amountIn accordingly
-        uint256 fee = IKittenPairFactory(args.factory).getFee(
-            args.pair,
-            metadata.stable
-        );
+        uint256 fee = IKittenPairFactory(args.factory).getFee(args.pair, metadata.stable);
         amountIn = (amountIn * 10000) / (10000 - fee); // Add fee back to get the total input
 
         // console.log("after fee:", amountIn);
 
         return amountIn;
     }
-    
-    function _getAmountIn(
-        GetAmountInArgs memory args,
-        Metadata memory metadata
-    ) internal pure returns (uint256) {
+
+    function getAmountOut(GetAmountOutArgs memory args) internal view returns (uint256) {
+        return IKittenPair(args.pair).getAmountOut(args.amountIn, args.tokenIn);
+    }
+
+    function _getAmountIn(GetAmountInArgs memory args, Metadata memory metadata) internal pure returns (uint256) {
         if (metadata.stable) {
             uint256 xy = _k(
                 GetKArgs({
@@ -110,13 +113,7 @@ library KittenswapLib {
                 })
             ) - reserveA;
 
-            return
-                (amountIn *
-                    (
-                        args.tokenOut == metadata.token0
-                            ? metadata.decimals1
-                            : metadata.decimals0
-                    )) / 1e18;
+            return (amountIn * (args.tokenOut == metadata.token0 ? metadata.decimals1 : metadata.decimals0)) / 1e18;
         } else {
             (uint256 reserveA, uint256 reserveB) = args.tokenOut == metadata.token1
                 ? (metadata.reserve0, metadata.reserve1)
@@ -130,11 +127,8 @@ library KittenswapLib {
             return (args.amountOut * reserveA) / (reserveB - args.amountOut);
         }
     }
-    
-    
-    function _get_x(
-        GetXArgs memory xArgs
-    ) internal pure returns (uint256) {
+
+    function _get_x(GetXArgs memory xArgs) internal pure returns (uint256) {
         for (uint256 i = 0; i < 255; i++) {
             uint256 k = _f(xArgs.x, xArgs.y0);
             if (k < xArgs.xy) {
@@ -144,13 +138,17 @@ library KittenswapLib {
                     if (k == xArgs.xy) {
                         return xArgs.x; // Found the correct answer
                     }
-                    if (_k(GetKArgs({
-                        x: xArgs.x + 1,
-                        y: xArgs.y0,
-                        stable: xArgs.stable,
-                        precision0: xArgs.precision0,
-                        precision1: xArgs.precision1
-                    })) > xArgs.xy) {
+                    if (
+                        _k(
+                            GetKArgs({
+                                x: xArgs.x + 1,
+                                y: xArgs.y0,
+                                stable: xArgs.stable,
+                                precision0: xArgs.precision0,
+                                precision1: xArgs.precision1
+                            })
+                        ) > xArgs.xy
+                    ) {
                         return xArgs.x + 1; // Return x + 1 if it's the closest answer
                     }
                     dx = 1;
@@ -170,10 +168,8 @@ library KittenswapLib {
         }
         revert("!x");
     }
-    
-    function _k(
-        GetKArgs memory kArgs
-    ) internal pure returns (uint256) {
+
+    function _k(GetKArgs memory kArgs) internal pure returns (uint256) {
         if (kArgs.stable) {
             uint256 _x = (kArgs.x * 1e18) / kArgs.precision0;
             uint256 _y = (kArgs.y * 1e18) / kArgs.precision1;
@@ -184,17 +180,14 @@ library KittenswapLib {
             return kArgs.x * kArgs.y; // xy >= k
         }
     }
-    
+
     function _f(uint256 x0, uint256 y) internal pure returns (uint256) {
         uint256 _a = (x0 * y) / 1e18;
         uint256 _b = ((x0 * x0) / 1e18 + (y * y) / 1e18);
         return (_a * _b) / 1e18;
     }
-    
+
     function _d(uint256 x0, uint256 y) internal pure returns (uint256) {
-        return
-            (3 * x0 * ((y * y) / 1e18)) /
-            1e18 +
-            ((((x0 * x0) / 1e18) * x0) / 1e18);
+        return (3 * x0 * ((y * y) / 1e18)) / 1e18 + ((((x0 * x0) / 1e18) * x0) / 1e18);
     }
 }

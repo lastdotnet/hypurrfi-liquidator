@@ -8,18 +8,22 @@ import {IUniswapV3SwapCallback} from "./interfaces/IUniswapV3SwapCallback.sol";
 import {IUniswapV3PoolActions} from "./interfaces/IUniswapV3PoolActions.sol";
 import {PoolAddress} from "./lib/PoolAddress.sol";
 import {Path} from "./lib/Path.sol";
+import {KittenPath} from "./lib/KittenPath.sol";
 import {IKittenPair} from "./interfaces/IKittenPair.sol";
 import {IKittenPairFactory} from "./interfaces/IKittenPairFactory.sol";
 import {KittenswapLib} from "./lib/KittenswapLib.sol";
 import {IKittenswapSwapCallback} from "./interfaces/IKittenswapSwapCallback.sol";
+import {IERC20} from "./interfaces/IERC20.sol";
+import {IUsdxlFlashMinter} from "./interfaces/IUsdxlFlashMinter.sol";
+import {IERC3156FlashBorrower} from "./interfaces/IERC3156FlashBorrower.sol";
 
 uint160 constant MIN_SQRT_RATIO = 4295128739;
 /// @dev The maximum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MAX_TICK)
 uint160 constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
 contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3SwapCallback {
-    event LiquidatorAdded(address indexed liquidator);
-    event LiquidatorRemoved(address indexed liquidator);
+    event LiquidatorSet(address indexed liquidator, bool enabled);
+
     struct SwapCallbackData {
         bytes path;
         address collateralAsset;
@@ -27,12 +31,23 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
         address user;
         uint256 debtToCover;
         uint256 amountToPay;
+        bool liquidateUser;
+        bool swapOut;
     }
 
-    address public constant uniswapV3Factory = 0xB1c0fa0B789320044A6F623cFe5eBda9562602E3;
-    address public constant kittenPairFactory = 0xDa12F450580A4cc485C3b501BAB7b0B3cbc3B31B;
+    // hypurrfi
     IPool public constant pool = IPool(0xceCcE0EB9DD2Ef7996e01e25DD70e461F918A14b);
 
+    // usdxl
+    IERC20 public constant USDXL = IERC20(0xca79db4B49f608eF54a5CB813FbEd3a6387bC645);
+    IUsdxlFlashMinter public constant FLASH_MINTER = IUsdxlFlashMinter(0xD12f1c402197224339D5A324AC7ef4DF5d2142E9);
+
+    // hyperswap
+    address public constant hyperswapV3Factory = 0xB1c0fa0B789320044A6F623cFe5eBda9562602E3;
+
+    // kittenswap
+    IKittenPairFactory public constant kittenPairFactory =
+        IKittenPairFactory(0xDa12F450580A4cc485C3b501BAB7b0B3cbc3B31B);
     IKittenPair private activeKittenPair;
 
     mapping(address => bool) public isLiquidator;
@@ -44,14 +59,22 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
         _;
     }
 
-    function addLiquidator(address _liquidator) external onlyOwner {
-        isLiquidator[_liquidator] = true;
-        emit LiquidatorAdded(_liquidator);
+    modifier noInt256Overflow(address collateralAsset, address debtAsset) {
+        if (ERC20(collateralAsset).balanceOf(address(this)) > uint256(type(int256).max)) {
+            revert("Collateral asset balance too large");
+        }
+        if (ERC20(debtAsset).balanceOf(address(this)) > uint256(type(int256).max)) {
+            revert("Debt asset balance too large");
+        }
+        _;
     }
 
-    function removeLiquidator(address _liquidator) external onlyOwner {
-        isLiquidator[_liquidator] = false;
-        emit LiquidatorRemoved(_liquidator);
+    /// @notice Enable or disable a liquidator
+    /// @param _liquidator address of the liquidator
+    /// @param _enabled true to enable, false to disable
+    function setLiquidator(address _liquidator, bool _enabled) external onlyOwner {
+        isLiquidator[_liquidator] = true;
+        emit LiquidatorSet(_liquidator, _enabled);
     }
 
     /// @notice Performs a liquidation using a flash swap
@@ -60,43 +83,159 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
     /// @param user address of the user to be liquidated
     /// @param debtToCover amount of debt asset to repay in exchange for collateral
     /// @param swapPath encoded path of pools to swap collateral through, see: https://docs.uniswap.org/contracts/v3/guides/swaps/multihop-swaps
-    /// @param swapVenue venue of the swap, either "kittenswap" or "hyperswap"
+    /// @param liqPath either "kittenswap" or "hyperswap" or "usdxlFlashMinter"
     function liquidate(
         address collateralAsset,
         address debtAsset,
         address user,
         uint256 debtToCover,
         bytes calldata swapPath,
-        string calldata swapVenue
-    ) external onlyOwnerOrLiquidator returns (int256 collateralGain) {
-        uint256 collateralBalance = ERC20(collateralAsset).balanceOf(address(this));
+        string calldata liqPath
+    )
+        external
+        onlyOwnerOrLiquidator
+        noInt256Overflow(collateralAsset, debtAsset)
+        returns (address finalToken, int256 finalGain)
+    {
+        if (keccak256(abi.encodePacked(liqPath)) == keccak256(abi.encodePacked("kittenswap"))) {
+            // swap ends with collateral asset
+            finalToken = collateralAsset;
 
-        if (keccak256(abi.encodePacked(swapVenue)) == keccak256(abi.encodePacked("kittenswap"))) {
-            swapOutKittenswap(
+            // get balance before liquidation
+            finalGain = int256(ERC20(collateralAsset).balanceOf(address(this)));
+
+            // execute liquidation and swap(s)
+            _swapOutKittenswap(
                 debtToCover,
-                SwapCallbackData({path: swapPath, collateralAsset: collateralAsset, debtAsset: debtAsset, user: user, debtToCover: debtToCover, amountToPay: 0})
+                SwapCallbackData({
+                    path: swapPath,
+                    collateralAsset: collateralAsset,
+                    debtAsset: debtAsset,
+                    user: user,
+                    debtToCover: debtToCover,
+                    amountToPay: 0,
+                    liquidateUser: true,
+                    swapOut: true
+                })
             );
-        } else if (keccak256(abi.encodePacked(swapVenue)) == keccak256(abi.encodePacked("hyperswap"))) {
-            swapOutUniswap(
+
+            // calculate final gain
+            finalGain = int256(ERC20(collateralAsset).balanceOf(address(this))) - finalGain;
+        } else if (keccak256(abi.encodePacked(liqPath)) == keccak256(abi.encodePacked("hyperswap"))) {
+            // swap ends with collateral asset
+            finalToken = collateralAsset;
+
+            // get balance before liquidation
+            finalGain = int256(ERC20(collateralAsset).balanceOf(address(this)));
+
+            // execute liquidation and swap(s)
+            _swapOutUniswapV3(
                 debtToCover,
-                SwapCallbackData({path: swapPath, collateralAsset: collateralAsset, debtAsset: debtAsset, user: user, debtToCover: debtToCover, amountToPay: 0})
+                SwapCallbackData({
+                    path: swapPath,
+                    collateralAsset: collateralAsset,
+                    debtAsset: debtAsset,
+                    user: user,
+                    debtToCover: debtToCover,
+                    amountToPay: 0,
+                    liquidateUser: true,
+                    swapOut: true
+                })
             );
+
+            // calculate final gain
+            finalGain = int256(ERC20(collateralAsset).balanceOf(address(this))) - finalGain;
+        } else if (keccak256(abi.encodePacked(liqPath)) == keccak256(abi.encodePacked("usdxlFlashMinter"))) {
+            // swap ends with debt asset (USDXL)
+            finalToken = debtAsset;
+
+            // get balance before flash loan
+            finalGain = int256(ERC20(debtAsset).balanceOf(address(this)));
+
+            // execute flash loan, liquidate, and swap to USDXL
+            _flashLoanUsdxl(
+                debtToCover,
+                SwapCallbackData({
+                    path: swapPath,
+                    collateralAsset: collateralAsset,
+                    debtAsset: debtAsset,
+                    user: user,
+                    debtToCover: debtToCover,
+                    amountToPay: 0,
+                    liquidateUser: false,
+                    swapOut: false
+                })
+            );
+
+            // calculate final gain
+            finalGain = int256(ERC20(debtAsset).balanceOf(address(this))) - finalGain;
         } else {
-            revert("Invalid swap venue");
+            revert("Invalid liquidation path");
+        }
+    }
+
+    struct SwapInKittenswapLocals {
+        address tokenIn;
+        address tokenOut;
+        uint256 amountOut;
+        uint24 fee;
+        bool zeroForOne;
+        bool stable;
+    }
+
+    function _swapInKittenswap(uint256 amountIn, SwapCallbackData memory data) internal {
+        SwapInKittenswapLocals memory locals;
+
+        (locals.tokenIn, locals.tokenOut, locals.stable) = KittenPath.decodeFirstPool(data.path);
+
+        // TODO: configurable stable/volatile for pair; perhaps this is included in the swap path
+        activeKittenPair = IKittenPair(kittenPairFactory.getPair(locals.tokenIn, locals.tokenOut, locals.stable));
+
+        if (address(activeKittenPair) == address(0)) {
+            revert("Invalid kitten pair");
         }
 
-        collateralGain = int256(ERC20(collateralAsset).balanceOf(address(this))) - int256(collateralBalance);
+        // get amount out
+        data.amountToPay = amountIn;
+
+        locals.zeroForOne = (locals.tokenIn < locals.tokenOut);
+
+        locals.amountOut = KittenswapLib.getAmountOut(
+            KittenswapLib.GetAmountOutArgs({
+                pair: address(activeKittenPair),
+                factory: address(kittenPairFactory),
+                amountIn: amountIn,
+                tokenIn: locals.tokenIn
+            })
+        );
+
+        activeKittenPair.swap(
+            locals.zeroForOne ? 0 : locals.amountOut,
+            locals.zeroForOne ? locals.amountOut : 0,
+            address(this),
+            abi.encode(data)
+        );
+
+        activeKittenPair = IKittenPair(address(0));
+    }
+
+    struct SwapOutKittenswapLocals {
+        address tokenOut;
+        address tokenIn;
+        bool stable;
     }
 
     /// @dev Performs a single exact output swap
-    function swapOutKittenswap(uint256 amountOut, SwapCallbackData memory data) internal {
-        (address tokenOut, address tokenIn, uint24 fee) = Path.decodeFirstPool(data.path);
+    function _swapOutKittenswap(uint256 amountOut, SwapCallbackData memory data) internal {
+        SwapOutKittenswapLocals memory locals;
+
+        (locals.tokenOut, locals.tokenIn, locals.stable) = KittenPath.decodeFirstPool(data.path);
 
         // path is reversed for exact output swaps
-        bool zeroForOne = !(tokenIn < tokenOut);
+        bool zeroForOne = !(locals.tokenIn < locals.tokenOut);
 
         // storage is set for both directions; no address sorting necessary
-        activeKittenPair = IKittenPair(IKittenPairFactory(kittenPairFactory).getPair(tokenIn, tokenOut, true));
+        activeKittenPair = IKittenPair(kittenPairFactory.getPair(locals.tokenIn, locals.tokenOut, locals.stable));
 
         if (address(activeKittenPair) == address(0)) {
             revert("Invalid kitten pair");
@@ -107,58 +246,70 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
                 pair: address(activeKittenPair),
                 factory: address(kittenPairFactory),
                 amountOut: data.debtToCover,
-                tokenOut: tokenIn // exact output swaps are reversed
+                tokenOut: locals.tokenIn // exact output swaps are reversed
             })
         );
 
-        activeKittenPair.swap(
-            zeroForOne ? 0 : amountOut,
-            zeroForOne ? amountOut : 0,
-            address(this),
-            abi.encode(data)
-        );
+        activeKittenPair.swap(zeroForOne ? 0 : amountOut, zeroForOne ? amountOut : 0, address(this), abi.encode(data));
 
         activeKittenPair = IKittenPair(address(0));
     }
 
+    struct KittenswapHookLocals {
+        address tokenIn;
+        address tokenOut;
+        bool stable;
+        SwapCallbackData data;
+    }
+
     /// @inheritdoc IKittenswapSwapCallback
-    function hook(address sender, uint256 amount0Out, uint256 amount1Out, bytes calldata _data) external override {
+    function hook(address, uint256, uint256, bytes calldata data) external override {
         // validate msg.sender is kitten pair
         if (msg.sender != address(activeKittenPair)) {
             revert("msg.sender != activeKittenPair");
         }
 
-        SwapCallbackData memory data = abi.decode(_data, (SwapCallbackData));
+        KittenswapHookLocals memory locals;
 
-        (address tokenIn, address tokenOut, uint24 fee) = Path.decodeFirstPool(data.path);
+        locals.data = abi.decode(data, (SwapCallbackData));
 
-        pool.liquidationCall(
-            data.collateralAsset,
-            data.debtAsset,
-            data.user,
-            data.debtToCover,
-            false // receiveAToken is false so we can repay the swap
-        );
+        (locals.tokenIn, locals.tokenOut, locals.stable) = KittenPath.decodeFirstPool(locals.data.path);
 
-        // either initiate the next swap or pay
-        if (Path.hasMultiplePools(data.path)) {
-            data.path = Path.skipToken(data.path);
-            swapOutKittenswap(data.amountToPay, data);
+        if (locals.data.liquidateUser) {
+            pool.liquidationCall(
+                locals.data.collateralAsset,
+                locals.data.debtAsset,
+                locals.data.user,
+                locals.data.debtToCover,
+                false // receiveAToken is false so we can repay the swap
+            );
         }
 
-        tokenIn = tokenOut; // swap in/out because exact output swaps are reversed
+        // either initiate the next swap or pay
+        if (KittenPath.hasMultiplePools(locals.data.path)) {
+            locals.data.path = KittenPath.skipToken(locals.data.path);
+            if (locals.data.swapOut) {
+                _swapOutKittenswap(locals.data.amountToPay, locals.data);
+            } else {
+                _swapInKittenswap(locals.data.amountToPay, locals.data);
+            }
+        }
 
-        ERC20(tokenIn).transfer(msg.sender, data.amountToPay);
+        if (locals.data.swapOut) {
+            locals.tokenIn = locals.tokenOut; // swap in/out because exact output swaps are reversed
+        }
+
+        ERC20(locals.tokenIn).transfer(msg.sender, locals.data.amountToPay);
     }
 
     /// @dev Performs a single exact output swap
-    function swapOutUniswap(uint256 amountOut, SwapCallbackData memory data) internal {
+    function _swapOutUniswapV3(uint256 amountOut, SwapCallbackData memory data) internal {
         (address tokenOut, address tokenIn, uint24 fee) = Path.decodeFirstPool(data.path);
 
         bool zeroForOne = tokenIn < tokenOut;
 
         IUniswapV3PoolActions uniswapPool = IUniswapV3PoolActions(
-            PoolAddress.computeAddress(uniswapV3Factory, PoolAddress.getPoolKey(tokenIn, tokenOut, fee))
+            PoolAddress.computeAddress(hyperswapV3Factory, PoolAddress.getPoolKey(tokenIn, tokenOut, fee))
         );
 
         uniswapPool.token0();
@@ -177,27 +328,89 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
         SwapCallbackData memory data = abi.decode(_data, (SwapCallbackData));
 
         (address tokenIn, address tokenOut, uint24 fee) = Path.decodeFirstPool(data.path);
-        verifyCallback(uniswapV3Factory, PoolAddress.getPoolKey(tokenIn, tokenOut, fee));
+        verifyCallback(hyperswapV3Factory, PoolAddress.getPoolKey(tokenIn, tokenOut, fee));
 
-        pool.liquidationCall(
-            data.collateralAsset,
-            data.debtAsset,
-            data.user,
-            data.debtToCover,
-            false // receiveAToken is false so we can repay the swap
-        );
+        if (data.liquidateUser) {
+            pool.liquidationCall(
+                data.collateralAsset,
+                data.debtAsset,
+                data.user,
+                data.debtToCover,
+                false // receiveAToken is false so we can repay the swap
+            );
+        }
 
         uint256 amountToPay = amount0Delta > 0 ? uint256(amount0Delta) : uint256(amount1Delta);
 
         // either initiate the next swap or pay
         if (Path.hasMultiplePools(data.path)) {
             data.path = Path.skipToken(data.path);
-            swapOutUniswap(amountToPay, data);
+            _swapOutUniswapV3(amountToPay, data);
         }
 
         tokenIn = tokenOut; // swap in/out because exact output swaps are reversed
 
         ERC20(tokenIn).transfer(msg.sender, amountToPay);
+    }
+
+    /**
+     * @notice Initiates a flash loan
+     * @param debtToCover The amount of USDXL debt to cover
+     * @param data Additional data passed to the flash loan
+     */
+    function _flashLoanUsdxl(uint256 debtToCover, SwapCallbackData memory data) internal {
+        FLASH_MINTER.flashLoan(IERC3156FlashBorrower(address(this)), address(USDXL), debtToCover, abi.encode(data));
+    }
+
+    struct ExecuteOperationLocals {
+        uint256 amountToRepay;
+        uint256 collateralGained;
+        SwapCallbackData data;
+    }
+
+    /**
+     * @notice Callback function called by the flash minter
+     * @param amount The amount of USDXL borrowed
+     * @param fee The fee to be paid for the flash loan
+     * @param data Additional data passed to the flash loan
+     * @return success Whether the flash loan was handled successfully
+     */
+    function executeOperation(uint256 amount, uint256 fee, bytes calldata data) external returns (bool success) {
+        // Ensure caller is the flash minter
+        require(msg.sender == address(FLASH_MINTER), "Caller must be flash minter");
+
+        // Verify we received the flash loaned amount
+        require(USDXL.balanceOf(address(this)) >= amount, "Invalid balance for flash loan");
+
+        ExecuteOperationLocals memory locals;
+
+        locals.data = abi.decode(data, (SwapCallbackData));
+
+        require(locals.data.debtAsset == address(USDXL), "Debt asset must be USDXL");
+
+        // Calculate total amount to repay (loan + fee)
+        locals.amountToRepay = amount + fee;
+
+        locals.collateralGained = ERC20(locals.data.collateralAsset).balanceOf(address(this));
+
+        // liquidate user to receive collateral
+        pool.liquidationCall(
+            locals.data.collateralAsset,
+            locals.data.debtAsset,
+            locals.data.user,
+            locals.data.debtToCover,
+            false // receiveAToken is false so we can repay the swap
+        );
+
+        locals.collateralGained = ERC20(locals.data.collateralAsset).balanceOf(address(this)) - locals.collateralGained;
+
+        // swap all collateral to USDXL
+        _swapInKittenswap(locals.collateralGained, locals.data);
+
+        // Approve flash minter to pull repayment
+        USDXL.approve(address(FLASH_MINTER), locals.amountToRepay);
+
+        return true;
     }
 
     /// @notice Approve max ERC-20 allowance to Aave pool to save gas and not have to approve every liquidation

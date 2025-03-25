@@ -45,7 +45,18 @@ DOCKER_DEFAULT_PLATFORM=linux/amd64 cross build --target x86_64-unknown-linux-gn
 d. Copy (scp) binary to liquidator host
 
 6. Run liquidator
-   `./target/release/aave-v3-liquidator --rpc <xyz> --private-key <xyz> --bid-percentage 100 --deployent seashell --liquidator-address <xyz>`
+```bash
+./target/release/aave-v3-liquidator \
+    --archive-rpc <xyz> \
+    --write-rpc <xyz> \
+    --private-key <xyz> \
+    --bid-percentage 100 \
+    --deployment hyfi \
+    --liquidator-address <xyz> \
+    --chain-id <xyz>
+```
+```
+
 
 # Re-generate Contract Bindings
 

@@ -24,7 +24,5 @@ interface ILiquidator {
 
     /// @notice Approves the lending pool to spend tokens
     /// @param token The address of the token to approve
-    function approvePool(
-        address token
-    ) external;
-} 
+    function approvePool(address token) external;
+}

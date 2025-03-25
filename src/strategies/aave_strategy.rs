@@ -29,7 +29,7 @@ use std::iter::zip;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info};
-// use ethers::types::{Eip1559TransactionRequest};
+use crate::strategies::liq_path_config::LiqPathConfig;
 
 use super::types::{Action, Event};
 
@@ -39,9 +39,11 @@ struct DeploymentConfig {
     pool_address: Address,
     pool_data_provider: Address,
     oracle_address: Address,
-    weth_address: Address,
+    whype_address: Address,
     multicall3_address: Address,
-    swap_venue: String,
+    usdxl_address: Address,
+    liq_paths_config_file: String,
+    default_liq_path: String,
     creation_block: u64,
 }
 
@@ -58,7 +60,7 @@ pub const DEFAULT_LIQUIDATION_CLOSE_FACTOR: u64 = 5000;
 // admin stuff
 pub const LOG_BLOCK_RANGE: u64 = 1000;
 pub const MULTICALL_CHUNK_SIZE: usize = 100;
-pub const PRICE_ONE: u64 = 100000000;
+pub const PRICE_ONE: u64 = 100_000_000;
 
 fn get_deployment_config(deployment: Deployment) -> DeploymentConfig {
     match deployment {
@@ -67,20 +69,23 @@ fn get_deployment_config(deployment: Deployment) -> DeploymentConfig {
             pool_address: Address::from_str("0x32467b43BFa67273FC7dDda0999Ee9A12F2AaA08").unwrap(),
             pool_data_provider: Address::from_str("0x0B306BF915C4d645ff596e518fAf3F9669b97016").unwrap(),
             oracle_address: Address::from_str("0x0E801D84Fa97b50751Dbf25036d067dCf18858bF").unwrap(),
-            weth_address: Address::from_str("0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0").unwrap(),
+            whype_address: Address::from_str("0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0").unwrap(),
             multicall3_address: Address::from_str("0x720472c8ce72c2A2D711333e064ABD3E6BbEAdd3").unwrap(),
-            swap_venue: "hyperswap".to_string(),
+            usdxl_address: Address::from_str("0xca79db4B49f608eF54a5CB813FbEd3a6387bC645").unwrap(),
+            liq_paths_config_file: "config/1337/liq_paths.json".to_string(),
+            default_liq_path: "hyperswap".to_string(),
             creation_block: 0,
-
         },
         Deployment::HYFI => DeploymentConfig {
             state_cache_file: "borrowers-hyperevm-mainnet.json".to_string(),
             pool_address: Address::from_str("0xceCcE0EB9DD2Ef7996e01e25DD70e461F918A14b").unwrap(),
             pool_data_provider: Address::from_str("0x895C799a5bbdCb63B80bEE5BD94E7b9138D977d6").unwrap(),
             oracle_address: Address::from_str("0x9BE2ac1ff80950DCeb816842834930887249d9A8").unwrap(),
-            weth_address: Address::from_str("0x5555555555555555555555555555555555555555").unwrap(),
+            whype_address: Address::from_str("0x5555555555555555555555555555555555555555").unwrap(),
             multicall3_address: Address::from_str("0xa66aeb1c0a579ad95ba3940d18faad02c368a383").unwrap(),
-            swap_venue: "kittenswap".to_string(),
+            usdxl_address: Address::from_str("0xca79db4B49f608eF54a5CB813FbEd3a6387bC645").unwrap(),
+            liq_paths_config_file: "config/999/liq_paths.json".to_string(),
+            default_liq_path: "kittenswap".to_string(),
             creation_block: 82245,
         },
     }
@@ -92,8 +97,9 @@ pub struct StateCache {
     borrowers: HashMap<Address, Borrower>,
 }
 
-struct PoolState {
-    prices: HashMap<Address, U256>,
+#[derive(Debug)]
+pub struct PoolState {
+    pub prices: HashMap<Address, U256>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -129,6 +135,7 @@ pub struct AaveStrategy<M> {
     chain_id: u64,
     config: DeploymentConfig,
     liquidator: Address,
+    pool_state: PoolState,
 }
 
 impl<M: Middleware + 'static> AaveStrategy<M> {
@@ -149,6 +156,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             chain_id: config.chain_id,
             config: get_deployment_config(deployment),
             liquidator: Address::from_str(&liquidator_address).expect("invalid liquidator address"),
+            pool_state: PoolState { prices: HashMap::new() },
         }
     }
 }
@@ -159,7 +167,7 @@ struct LiquidationOpportunity {
     collateral_to_liquidate: U256,
     debt: Address,
     debt_to_cover: U256,
-    profit_eth: I256,
+    profit_usd: I256,
 }
 
 #[async_trait]
@@ -215,9 +223,9 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             }
         };
 
-        info!("Best op - profit: {}", op.profit_eth);
+        info!("Best op - profit: {}", op.profit_usd);
 
-        if op.profit_eth < I256::from(0) {
+        if op.profit_usd < I256::from(0) {
             info!("No profitable ops, passing");
             return vec![];
         }
@@ -244,15 +252,13 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             }
         };
 
-        // let total_profit = match U256::from_dec_str(&op.profit_eth.to_string()) {
-        //     Ok(profit) => profit,
-        //     Err(e) => {
-        //         error!("Failed to convert profit: {}", e);
-        //         return vec![];
-        //     }
-        // };
-
-        let total_profit = U256::from(205_401_561_654_042u128);
+        let total_profit = match U256::from_dec_str(&op.profit_usd.to_string()) {
+            Ok(profit) => profit,
+            Err(e) => {
+                error!("Failed to convert profit: {}", e);
+                return vec![];
+            }
+        };
 
         vec![Action::SubmitTx(SubmitTxToMempool {
             tx,
@@ -548,28 +554,6 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         Ok(())
     }
 
-    // 8 decimals of precision
-    async fn get_asset_price_eth(&self, asset: &Address, pool_state: &PoolState) -> Result<U256> {
-        // 1:1 for weth
-        let weth_address = self.config.weth_address;
-        if asset.eq(&weth_address) {
-            return Ok(U256::from(PRICE_ONE));
-        }
-
-        // usd / token
-        let usd_price = pool_state
-            .prices
-            .get(asset)
-            .ok_or(anyhow!("No price found for asset {}", asset.to_string()))?;
-        // usd / eth
-        let usd_price_eth = pool_state.prices.get(&weth_address).ok_or(anyhow!(
-            "No price found for asset {}",
-            weth_address.to_string()
-        ))?;
-        // usd / token * eth / usd = eth / token
-        Ok(usd_price * U256::from(PRICE_ONE) / usd_price_eth)
-    }
-
     async fn get_best_liquidation_op(&mut self) -> Result<Option<LiquidationOpportunity>> {
         let underwater = self.get_underwater_borrowers().await?;
 
@@ -611,8 +595,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
                             .map_err(|e| info!("Liquidation op failed {}", e))
                             .ok()
                         {
-                            if op.profit_eth > best_bonus {
-                                best_bonus = op.profit_eth;
+                            if op.profit_usd > best_bonus {
+                                best_bonus = op.profit_usd;
                                 best_op = Some(op);
                             }
                         }
@@ -624,33 +608,67 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         Ok(best_op)
     }
 
-    // Assumes there are WETH pairs for both collateral and debt asset types and that all pools have 500 fee
-    // TODO: handle arbitrary pool fees and path
-    fn get_swap_path(&self, collateral: &Address, debt: &Address) -> Result<Bytes> {
-        let weth_address = self.config.weth_address;
-
-        let pool_fee: u32 = 3000;
-        let pool_fee_encoded = pool_fee.to_be_bytes()[1..].to_vec(); // convert to uint24 by taking last 3 bytes only
-        let mut path: Vec<Token> = Vec::new();
-
-        // We first want to swap for debt
-        path.push(Token::Address(*debt));
-        path.push(Token::FixedBytes(pool_fee_encoded.clone()));
-
-        // If neither the collateral or debt is WETH then we want to introduce an intermediate swap through WETH
-        if collateral.ne(&weth_address) && debt.ne(&weth_address) {
-            path.push(Token::Address(weth_address));
-            path.push(Token::FixedBytes(pool_fee_encoded.clone()));
+    fn get_liq_path(&self, collateral: &Address, debt: &Address) -> Result<(Bytes, String)> {
+        // Try to use the configured path first
+        if let Ok(liq_config) = LiqPathConfig::load_from_file(&self.config.liq_paths_config_file) {
+            if let Some(path) = liq_config.build_liq_path(collateral, debt) {
+                return Ok(path);
+            }
         }
 
-        // Finally we want to use obtained collateral to pay the flash swap back
-        path.push(Token::Address(*collateral));
+        // Fall back to default logic if no config file or no path found
+        let usdxl_address = self.config.usdxl_address;
+        let whype_address = self.config.whype_address;
 
-        debug!("get_swap_path {:?}", path);
+        let mut path: Vec<Token> = Vec::new();
+        
+        // Determine the venue and if it's an exact output swap
+        let liq_path = if debt.eq(&usdxl_address) {
+            "usdxlFlashMinter".to_string()
+        } else {
+            self.config.default_liq_path.clone()
+        };
+
+        let is_kittenswap = liq_path == "kittenswap";
+        let exact_out = liq_path == "kittenswap" || liq_path == "hyperswap";
+
+        let (start_token, end_token) = if exact_out {
+            (debt, collateral)
+        } else {
+            (collateral, debt)
+        };
+
+        // Build path
+        path.push(Token::Address(*start_token));
+
+        // If neither token is WETH, route through it
+        if collateral.ne(&whype_address) && debt.ne(&whype_address) {
+            if !is_kittenswap {
+                path.push(Token::FixedBytes(3000u32.to_be_bytes()[1..].to_vec()));
+            }
+            path.push(Token::Bool(Self::is_stable(
+                &self.pool_state,
+                if exact_out { &whype_address } else { start_token },
+                if exact_out { start_token } else { &whype_address }
+            )?));
+            path.push(Token::Address(whype_address));
+        }
+
+        // Add final token
+        if !is_kittenswap {
+            path.push(Token::FixedBytes(3000u32.to_be_bytes()[1..].to_vec()));
+        }
+        path.push(Token::Bool(Self::is_stable(
+            &self.pool_state,
+            if path.len() > 1 { &whype_address } else { start_token },
+            end_token
+        )?));
+        path.push(Token::Address(*end_token));
+
+        debug!("get_liq_path {:?}", path);
 
         let encoded_swap_path = encode_packed(&path)?;
-
-        Ok(Bytes::from(encoded_swap_path))
+        Ok((Bytes::from(encoded_swap_path), liq_path))
     }
 
     async fn get_pool_state(&self) -> Result<PoolState> {
@@ -734,19 +752,21 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             collateral_to_liquidate,
             debt: debt_address.clone(),
             debt_to_cover,
-            profit_eth: I256::from(0),
+            profit_usd: I256::from(0),
         };
 
-        let gain = self.build_liquidation_call(&op).await?.call().await?;
+        let (final_token, gain) = self.build_liquidation_call(&op).await?.call().await?;
 
-        let weth_price = self
-            .get_asset_price_eth(collateral_address, pool_state)
-            .await?;
-        op.profit_eth = gain * I256::from_dec_str(&weth_price.to_string())? / I256::from(PRICE_ONE);
+        let final_token_price = pool_state
+            .prices
+            .get(&final_token)
+            .ok_or(anyhow!("No price found for final token"))?;
+
+        op.profit_usd = gain * I256::from_dec_str(&final_token_price.to_string())? / I256::from(PRICE_ONE);
 
         info!(
-            "Found opportunity - borrower: {:?}, collateral: {:?}, debt: {:?}, profit_eth: {:?}",
-            borrower_address, collateral_address, debt_address, op.profit_eth
+            "Found opportunity - borrower: {:?}, collateral: {:?}, debt: {:?}, profit_usd: {:?}",
+            borrower_address, collateral_address, debt_address, op.profit_usd
         );
 
         Ok(op)
@@ -755,17 +775,18 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
     async fn build_liquidation_call(
         &self,
         op: &LiquidationOpportunity,
-    ) -> Result<ContractCall<M, I256>> {
+    ) -> Result<ContractCall<M, (Address, I256)>> {
         info!(
-            "Build - borrower: {:?}, collateral: {:?}, debt: {:?}, debt_to_cover: {:?}, profit_eth: {:?}",
-            op.borrower, op.collateral, op.debt, op.debt_to_cover, op.profit_eth
+            "Build - borrower: {:?}, collateral: {:?}, debt: {:?}, debt_to_cover: {:?}, profit_usd: {:?}",
+            op.borrower, op.collateral, op.debt, op.debt_to_cover, op.profit_usd
         );
 
         let liquidator = Liquidator::new(self.liquidator, self.write_client.clone());
 
-        let swap_path = self.get_swap_path(&op.collateral, &op.debt)?;
+        let (swap_path, liq_path) = self.get_liq_path(&op.collateral, &op.debt)?;
 
         info!("swap path: {:?}", swap_path);
+        info!("liq path: {:?}", liq_path);
 
         info!("collateral to liquidate: {:?}", op.collateral_to_liquidate);
 
@@ -775,7 +796,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             op.borrower,
             op.debt_to_cover,
             Bytes::from(swap_path),
-            self.config.swap_venue.clone(),
+            liq_path,
         );
 
         debug!("Liquidation op contract call: {:?}", contract_call);
@@ -802,6 +823,38 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             token, amount, balance
         );
         Ok(balance >= amount)
+    }
+
+    /// Determines if a trading pair should be considered stable based on pool state prices
+    /// Returns true if the prices are within 10% of each other
+    fn is_stable(pool_state: &PoolState, token_a: &Address, token_b: &Address) -> Result<bool> {
+        // Get prices from pool state
+        let price_a = pool_state
+            .prices
+            .get(token_a)
+            .ok_or_else(|| anyhow!("No price found for token {}", token_a))?;
+        
+        let price_b = pool_state
+            .prices
+            .get(token_b)
+            .ok_or_else(|| anyhow!("No price found for token {}", token_b))?;
+
+        // Ensure we don't divide by zero
+        if price_b.is_zero() {
+            return Ok(false);
+        }
+
+        // Convert U256 to f64 via u128
+        let ratio = (price_a.as_u128() as f64) / (price_b.as_u128() as f64);
+
+        debug!(
+            "Stability check for {:?} and {:?}: price_a={}, price_b={}, ratio={}",
+            token_a, token_b, price_a, price_b, ratio
+        );
+
+        // Check if prices are within 10% of each other
+        // ratio should be between 0.9 and 1.1
+        Ok(ratio >= 0.9 && ratio <= 1.1)
     }
 }
 

@@ -268,6 +268,17 @@ library BytesLib {
         return tempBytes;
     }
 
+    function toBool(bytes memory _bytes, uint256 _start) internal pure returns (bool) {
+        require(_bytes.length >= _start + 1, "toBool_outOfBounds");
+        bool tempBool;
+
+        assembly {
+            tempBool := mload(add(add(_bytes, 0x1), _start))
+        }
+
+        return tempBool;
+    }
+
     function toAddress(bytes memory _bytes, uint256 _start) internal pure returns (address) {
         require(_bytes.length >= _start + 20, "toAddress_outOfBounds");
         address tempAddress;
