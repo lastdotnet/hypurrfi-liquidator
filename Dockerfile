@@ -26,6 +26,8 @@ WORKDIR /app
 
 # Copy the binary from builder
 COPY --from=builder /usr/src/app/target/release/aave-v3-liquidator /app/
+# Copy the borrowers file
+COPY --from=builder /usr/src/app/borrowers-hyperevm-mainnet.json /app/
 
 # Make the binary executable
 RUN chmod +x /app/aave-v3-liquidator
