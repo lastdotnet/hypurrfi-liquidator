@@ -2,6 +2,7 @@
 pragma solidity >=0.6.0;
 
 import "./BytesLib.sol";
+import "forge-std/console.sol";
 
 /// @title Functions for manipulating path data for multihop swaps
 library KittenPath {
@@ -41,7 +42,7 @@ library KittenPath {
     /// @return stable True if the pool is a stable pool, otherwise false
     function decodeFirstPool(bytes memory path) internal pure returns (address tokenA, address tokenB, bool stable) {
         tokenA = path.toAddress(0);
-        stable = path.toBool(NEXT_OFFSET);
+        stable = path.toBool(NEXT_OFFSET - STABLE_SIZE);
         tokenB = path.toAddress(NEXT_OFFSET);
     }
 

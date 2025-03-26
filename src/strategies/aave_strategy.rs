@@ -17,7 +17,7 @@ use ethers::{
     contract::builders::ContractCall,
     providers::Middleware,
     types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, ValueOrArray, H160, I256, U256, U64,
+        transaction::eip2718::TypedTransaction, Address, Bytes, ValueOrArray, I256, U256, U64,
     },
 };
 use ethers_contract::Multicall;
@@ -30,6 +30,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info};
 use crate::strategies::liq_path_config::LiqPathConfig;
+use hex;
 
 use super::types::{Action, Event};
 
@@ -72,7 +73,7 @@ fn get_deployment_config(deployment: Deployment) -> DeploymentConfig {
             whype_address: Address::from_str("0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0").unwrap(),
             multicall3_address: Address::from_str("0x720472c8ce72c2A2D711333e064ABD3E6BbEAdd3").unwrap(),
             usdxl_address: Address::from_str("0xca79db4B49f608eF54a5CB813FbEd3a6387bC645").unwrap(),
-            liq_paths_config_file: "config/1337/liq_paths.json".to_string(),
+            liq_paths_config_file: "liq_paths.json".to_string(),
             default_liq_path: "hyperswap".to_string(),
             creation_block: 0,
         },
@@ -82,9 +83,9 @@ fn get_deployment_config(deployment: Deployment) -> DeploymentConfig {
             pool_data_provider: Address::from_str("0x895C799a5bbdCb63B80bEE5BD94E7b9138D977d6").unwrap(),
             oracle_address: Address::from_str("0x9BE2ac1ff80950DCeb816842834930887249d9A8").unwrap(),
             whype_address: Address::from_str("0x5555555555555555555555555555555555555555").unwrap(),
-            multicall3_address: Address::from_str("0xa66aeb1c0a579ad95ba3940d18faad02c368a383").unwrap(),
+            multicall3_address: Address::from_str("0xA66AEb1c0A579Ad95bA3940d18FAad02C368A383").unwrap(),
             usdxl_address: Address::from_str("0xca79db4B49f608eF54a5CB813FbEd3a6387bC645").unwrap(),
-            liq_paths_config_file: "config/999/liq_paths.json".to_string(),
+            liq_paths_config_file: "liq_paths.json".to_string(),
             default_liq_path: "kittenswap".to_string(),
             creation_block: 82245,
         },
@@ -230,20 +231,6 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             return vec![];
         }
 
-        // Check if user has sufficient debt token balance
-        let has_balance = match self.check_user_balance(op.debt, op.debt_to_cover).await {
-            Ok(balance) => balance,
-            Err(e) => {
-                error!("Error checking balance: {}", e);
-                return vec![];
-            }
-        };
-
-        if !has_balance {
-            info!("Insufficient balance for debt token {}", op.debt);
-            return vec![];
-        }
-
         let tx = match self.build_liquidation(&op).await {
             Ok(tx) => tx,
             Err(e) => {
@@ -299,7 +286,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
             let result: Vec<(U256, U256, U256, U256, U256, U256)> = multicall.call_array().await?;
             for (borrower, (_, _, _, _, _, health_factor)) in zip(chunk, result) {
-                info!("Checking borrower {:?}", borrower.address);
+                // info!("Checking borrower {:?}", borrower.address);
                 if health_factor.lt(&U256::from_dec_str("1000000000000000000").unwrap()) {
                     info!(
                         "Found underwater borrower {:?} -  healthFactor: {}",
@@ -307,7 +294,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
                     );
                     underwater_borrowers.push((borrower.address, health_factor));
                 } else {
-                    info!("Borrower {:?} is not underwater; healthFactor: {}", borrower.address, health_factor);
+                    // info!("Borrower {:?} is not underwater; healthFactor: {}", borrower.address, health_factor);
                 }
             }
         }
@@ -335,8 +322,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         Ok(())
     }
 
-    fn write_intermediate_cache(&self, block_number: u64, borrower_count: u64) {
-        info!("Writing intermediate cache after {} new borrowers", borrower_count);
+    fn write_intermediate_cache(&self, block_number: u64) {
+        
         let cache = StateCache {
             last_block_number: block_number,
             borrowers: self.borrowers.clone(),
@@ -362,10 +349,10 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         // Process blocks in 1M chunks
         for chunk_start in (self.last_block_number..latest_block.as_u64()).step_by(BLOCK_CHUNK_SIZE as usize) {
             let chunk_end = std::cmp::min(chunk_start + BLOCK_CHUNK_SIZE, latest_block.as_u64());
-            info!(
-                "Processing borrow logs for blocks {} to {}",
-                chunk_start, chunk_end
-            );
+            // info!(
+            //     "Processing borrow logs for blocks {} to {}",
+            //     chunk_start, chunk_end
+            // );
 
             self.get_borrow_logs(chunk_start.into(), chunk_end.into())
                 .await?
@@ -376,7 +363,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
                         let borrower = self.borrowers.get_mut(&user).unwrap();
                         borrower.debt.insert(log.reserve);
 
-                        self.write_intermediate_cache(chunk_end, borrower_count);
+                        self.write_intermediate_cache(chunk_end);
                     } else {
                         self.borrowers.insert(
                             user,
@@ -388,7 +375,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
                         );
                         borrower_count += 1;
 
-                        self.write_intermediate_cache(chunk_end, borrower_count);
+                        self.write_intermediate_cache(chunk_end);
                     }
                 });
         }
@@ -409,8 +396,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             .for_each(|log| {
                 let user = log.on_behalf_of;
                 if self.borrowers.contains_key(&user) {
-                    info!("Found borrower with collateral {:?}", log.reserve);
-                    self.write_intermediate_cache(chunk_end, borrower_count);
+                    // info!("Found borrower with collateral {:?}", log.reserve);
+                    self.write_intermediate_cache(chunk_end);
                     let borrower = self.borrowers.get_mut(&user).unwrap();
                         borrower.collateral.insert(log.reserve);
                     }
@@ -482,6 +469,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
         Ok(res)
     }
+
 
     async fn approve_tokens(&mut self) -> Result<()> {
         let liquidator = Liquidator::new(self.liquidator, self.write_client.clone());
@@ -565,6 +553,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         let pool_data =
             IPoolDataProvider::<M>::new(self.config.pool_data_provider, self.write_client.clone());
 
+        info!("pool_state init");
+
         let mut best_bonus: I256 = I256::MIN;
         let mut best_op: Option<LiquidationOpportunity> = None;
         let pool_state = self.get_pool_state().await?;
@@ -615,6 +605,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
                 return Ok(path);
             }
         }
+
+        info!("no liq config found for {:?} and {:?}", collateral, debt);
 
         // Fall back to default logic if no config file or no path found
         let usdxl_address = self.config.usdxl_address;
@@ -672,14 +664,16 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
     }
 
     async fn get_pool_state(&self) -> Result<PoolState> {
+        info!("multicall start");
         let mut multicall = Multicall::<M>::new(
             self.write_client.clone(),
-            Some(H160::from_str(self.config.multicall3_address.to_string().as_str())?),
+            Some(self.config.multicall3_address.into()),
         )
         .await?;
+        info!("multicall init");
         let mut prices = HashMap::new();
         let price_oracle = IAaveOracle::<M>::new(self.config.oracle_address, self.write_client.clone());
-
+        info!("price_oracle init");
         for token_address in self.tokens.keys() {
             multicall.add_call(price_oracle.get_asset_price(*token_address), false);
         }
@@ -790,6 +784,20 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
         info!("collateral to liquidate: {:?}", op.collateral_to_liquidate);
 
+        info!("liquidator contract args:
+COLLATERAL=0x{}
+DEBT=0x{}
+BORROWER=0x{}
+DEBT_TO_COVER={}
+SWAP_PATH=0x{}
+LIQ_PATH={}",
+            hex::encode(op.collateral.clone().as_ref()),
+            hex::encode(op.debt.clone().as_ref()),
+            hex::encode(op.borrower.clone().as_ref()),
+            op.debt_to_cover,
+            hex::encode(swap_path.clone().as_ref()),
+            liq_path);
+
         let contract_call = liquidator.liquidate(
             op.collateral,
             op.debt,
@@ -810,19 +818,6 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         // let _call = self.build_liquidation_call(op).await?;
         // Ok(TypedTransaction::Eip1559(Eip1559TransactionRequest::new()
         //     .chain_id(self.chain_id).clone()))
-    }
-
-    async fn check_user_balance(&self, token: Address, amount: U256) -> Result<bool> {
-        let token_contract = IERC20::new(token, self.write_client.clone());
-        let user = self.write_client.default_sender()
-            .ok_or(anyhow!("No default sender configured"))?;
-        
-        let balance = token_contract.balance_of(user).await?;
-        info!(
-            "User balance check - token: {}, required: {}, balance: {}",
-            token, amount, balance
-        );
-        Ok(balance >= amount)
     }
 
     /// Determines if a trading pair should be considered stable based on pool state prices

@@ -23,8 +23,6 @@ pub mod collectors;
 pub mod executors;
 pub mod strategies;
 
-static POLL_INTERVAL_SECS: u64 = 60 * 5;
-
 /// CLI Options.
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -51,6 +49,10 @@ pub struct Args {
 
     #[arg(long)]
     pub chain_id: u64,
+
+    /// Interval in seconds between polling for new events
+    #[arg(long, default_value = "15")]
+    pub poll_interval_secs: u64,
 }
 
 #[tokio::main]
@@ -66,7 +68,6 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    println!("{:?}", args);
 
     // Set up ethers provider.
     let archive_rpc = Http::from_str(&args.archive_rpc)?;
@@ -88,7 +89,7 @@ async fn main() -> Result<()> {
     let mut engine: Engine<Event, Action> = Engine::default();
 
     // Set up time collector.
-    let time_collector = Box::new(TimeCollector::new(POLL_INTERVAL_SECS));
+    let time_collector = Box::new(TimeCollector::new(args.poll_interval_secs));
     let time_collector = CollectorMap::new(time_collector, Event::NewTick);
     engine.add_collector(Box::new(time_collector));
 

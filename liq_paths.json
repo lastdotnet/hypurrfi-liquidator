@@ -1,0 +1,90 @@
+[
+        {
+            "collateral": "0x5555555555555555555555555555555555555555",
+            "debt": "0xca79db4B49f608eF54a5CB813FbEd3a6387bC645",
+            "pair": "WHYPE-USDXL",
+            "liq_paths": [
+                {
+                    "liq_path": "usdxlFlashMinter",
+                    "swap_path": [
+                        {
+                            "swap_venue": "kittenswap",
+                            "pair": "WHYPE-USDXL",
+                            "token_in": "0x5555555555555555555555555555555555555555",
+                            "token_out": "0xca79db4B49f608eF54a5CB813FbEd3a6387bC645",
+                            "stable": false
+                        }
+                    ]
+                },
+                {
+                    "liq_path": "kittenswap",
+                    "swap_path": [
+                        {
+                            "swap_venue": "kittenswap",
+                            "pair": "WHYPE-USDXL",
+                            "token_in": "0x5555555555555555555555555555555555555555",
+                            "token_out": "0xca79db4B49f608eF54a5CB813FbEd3a6387bC645",
+                            "stable": false
+                        }
+                    ]
+                },
+                {
+                    "liq_path": "hyperswap",
+                    "swap_path": [
+                        {
+                            "swap_venue": "hyperswap",
+                            "pair": "WHYPE-USDXL",
+                            "token_in": "0x5555555555555555555555555555555555555555",
+                            "token_out": "0xca79db4B49f608eF54a5CB813FbEd3a6387bC645",
+                            "fee": 3000
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "collateral": "0x94e8396e0869c9f2200760af0621afd240e1cf38",
+            "debt": "0xca79db4B49f608eF54a5CB813FbEd3a6387bC645",
+            "pair": "wstHYPE-USDXL",
+            "liq_paths": [
+                {
+                    "liq_path": "usdxlFlashMinter",
+                    "swap_path": [
+                        {
+                            "swap_venue": "kittenswap",
+                            "pair": "wstHYPE-WHYPE",
+                            "token_in": "0x94e8396e0869c9f2200760af0621afd240e1cf38",
+                            "token_out": "0x5555555555555555555555555555555555555555",
+                            "stable": true
+                        },
+                        {
+                            "swap_venue": "kittenswap",
+                            "pair": "WHYPE-USDXL",
+                            "token_in": "0x5555555555555555555555555555555555555555",
+                            "token_out": "0xca79db4B49f608eF54a5CB813FbEd3a6387bC645",
+                            "stable": false
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "collateral": "0x94e8396e0869c9f2200760af0621afd240e1cf38",
+            "debt": "0x5555555555555555555555555555555555555555",
+            "pair": "wstHYPE-WHYPE",
+            "liq_paths": [
+                {
+                    "liq_path": "kittenswap",
+                    "swap_path": [
+                        {
+                            "swap_venue": "kittenswap",
+                            "pair": "wstHYPE-WHYPE",
+                            "token_in": "0x94e8396e0869c9f2200760af0621afd240e1cf38",
+                            "token_out": "0x5555555555555555555555555555555555555555",
+                            "stable": true
+                        }
+                    ]
+                }
+            ]
+        }
+]

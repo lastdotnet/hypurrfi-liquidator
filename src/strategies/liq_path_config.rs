@@ -1,160 +1,123 @@
-use serde::{Deserialize, Serialize};
+use anyhow::{anyhow, Result};
 use ethers::types::Address;
 use ethers::abi::{encode_packed, Token};
 use ethers::types::Bytes;
-use std::collections::HashMap;
+use log::info;
+use serde::{Deserialize, Serialize};
+use std::fs::File;
+use log::{error};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LiqPathConfig {
-    #[serde(with = "token_pair_map_serde")]
-    pub pairs: HashMap<(Address, Address), Vec<LiquidationPath>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TokenPairConfig {
-    collateral: Address,
-    debt: Address,
-    pair: String,
-    liq_paths: Vec<LiquidationPath>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LiquidationPath {
-    pub liq_path: String,
-    pub swap_path: Vec<SwapPairConfig>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SwapPairConfig {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SwapStep {
+    pub swap_venue: String,
     pub pair: String,
     pub token_in: Address,
     pub token_out: Address,
-    #[serde(flatten)]
-    pub venue_config: SwapVenueConfig,
+    #[serde(default)]
+    pub stable: bool,
+    #[serde(default)]
+    pub fee: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "swap_venue")]
-pub enum SwapVenueConfig {
-    #[serde(rename = "kittenswap")]
-    Kittenswap { stable: bool },
-    #[serde(rename = "hyperswap")]
-    Hyperswap { fee: u32 },
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LiqPath {
+    pub liq_path: String,
+    pub swap_path: Vec<SwapStep>,
 }
 
-// Custom serialization for the HashMap
-mod token_pair_map_serde {
-    use super::*;
-    use serde::{Deserializer, Serializer};
-
-    pub fn serialize<S>(
-        map: &HashMap<(Address, Address), Vec<LiquidationPath>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let pairs: Vec<_> = map
-            .iter()
-            .map(|((collateral, debt), liq_paths)| TokenPairConfig {
-                collateral: *collateral,
-                debt: *debt,
-                pair: format!("{}-{}", "TOKEN_A", "TOKEN_B"), // You might want to improve this
-                liq_paths: liq_paths.to_vec(),
-            })
-            .collect();
-        pairs.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<HashMap<(Address, Address), Vec<LiquidationPath>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let pairs: Vec<TokenPairConfig> = Vec::deserialize(deserializer)?;
-        Ok(pairs
-            .into_iter()
-            .map(|pair| ((pair.collateral, pair.debt), pair.liq_paths))
-            .collect())
-    }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PathConfig {
+    pub collateral: Address,
+    pub debt: Address,
+    pub pair: String,
+    pub liq_paths: Vec<LiqPath>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LiqPathConfig(Vec<PathConfig>);
 
 impl LiqPathConfig {
-    pub fn load_from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let file = std::fs::File::open(path)?;
-        let config: LiqPathConfig = serde_json::from_reader(file)?;
-        Ok(config)
+    pub fn load_from_file(path: &str) -> Result<Self> {
+        match File::open(path) {
+            Ok(file) => {
+                info!("opening liq path config file");
+                let result = serde_json::from_reader(file);
+                match result {
+                    Ok(config) => {
+                        info!("read liq path config from file");
+                        Ok(config)
+                    },
+                    Err(e) => {
+                        error!("failed to parse liq path config: {}", e);
+                        Err(e.into())
+                    }
+                }
+            }
+            Err(_) => {
+                info!("no liq path config file found");
+                Err(anyhow!("no liq path config file found"))
+            }
+        }
     }
 
-    pub fn find_path(&self, token_in: &Address, token_out: &Address, venue: &str) -> Option<&SwapPairConfig> {
-        // Sort addresses for lookup
-        let (first, second) = if token_in < token_out {
-            (token_in, token_out)
-        } else {
-            (token_out, token_in)
-        };
+    pub fn find_path(&self, token_in: &Address, token_out: &Address, venue: &str) -> Option<&LiqPath> {
+        // Find the path config that matches these tokens
+        let path_config = self.0.iter().find(|config| {
+            (config.collateral == *token_in && config.debt == *token_out) ||
+            (config.collateral == *token_out && config.debt == *token_in)
+        })?;
 
-        // Direct lookup in the HashMap
-        let paths = self.pairs.get(&(*first, *second))?;
-
-        // Find the path with the given venue name
-        let path = paths.iter()
-            .find(|p| p.liq_path == venue)?;
-
-        // Return the first pair (assuming one pair per venue for now)
-        path.swap_path.first()
+        // Find and return the entire liq path with the given venue
+        path_config.liq_paths.iter()
+            .find(|p| p.liq_path == venue)
     }
 
     pub fn build_liq_path(&self, collateral: &Address, debt: &Address) -> Option<(Bytes, String)> {
-        // Sort addresses for lookup
-        let (first, second) = if collateral < debt {
-            (collateral, debt)
-        } else {
-            (debt, collateral)
-        };
-
-        // Get the paths for this token pair
-        let paths = self.pairs.get(&(*first, *second))?;
+        info!("building liq path for {:?} and {:?}", collateral, debt);
+        
+        // Find the path config that matches these tokens
+        let path_config = self.0.iter().find(|config| {
+            (config.collateral == *collateral && config.debt == *debt) ||
+            (config.collateral == *debt && config.debt == *collateral)
+        })?;
 
         // Use the highest priority path (first in the list)
-        let path = paths.first()?;
+        let path = path_config.liq_paths.first()?;
 
-        // Build the encoded path from the swap pairs
+        info!("using path: {:?}", path);
+
+        // Build the encoded path from the swap steps
         let mut encoded_path: Vec<Token> = Vec::new();
         
-        // Need to reverse the path in two cases:
-        // 1. For exact output venues (kittenswap/hyperswap)
-        // 2. When the collateral/debt tokens are opposite of our configured case
+        // Need to reverse the path for exact output venues (kittenswap/hyperswap)
         let is_exact_out = path.liq_path == "kittenswap" || path.liq_path == "hyperswap";
         
-        let tokens_reversed = first != collateral; // true if we had to swap the order for lookup
+        let tokens_reversed = path_config.collateral != *collateral;
         let should_reverse = is_exact_out != tokens_reversed; // XOR - reverse if exactly one is true
 
-        let mut pairs = path.swap_path.iter().collect::<Vec<_>>();
+        let mut steps = path.swap_path.iter().collect::<Vec<_>>();
         if should_reverse {
-            pairs.reverse();
+            steps.reverse();
         }
 
-        for pair in pairs {
+        for (index, step) in steps.iter().enumerate() {
             // Also need to swap token_in/token_out if path is reversed
             let (token_in, token_out) = if should_reverse {
-                (pair.token_out, pair.token_in)
+                (step.token_out, step.token_in)
             } else {
-                (pair.token_in, pair.token_out)
+                (step.token_in, step.token_out)
             };
 
-            encoded_path.push(Token::Address(token_in));
+            // Add token_in only for the first step
+            if index == 0 {
+                encoded_path.push(Token::Address(token_in));
+            }
             
-            match &pair.venue_config {
-                SwapVenueConfig::Kittenswap { stable } => {
-                    encoded_path.push(Token::FixedBytes(vec![0; 3])); // Empty fee for kittenswap
-                    encoded_path.push(Token::Bool(*stable));
-                },
-                SwapVenueConfig::Hyperswap { fee } => {
-                    encoded_path.push(Token::FixedBytes(fee.to_be_bytes()[1..].to_vec()));
-                    encoded_path.push(Token::Bool(false)); // No stable flag for hyperswap
-                },
+            if step.swap_venue == "kittenswap" {
+                encoded_path.push(Token::Bool(step.stable));
+            } else if step.swap_venue == "hyperswap" {
+                 // fee is a uint24 which is 3 bytes
+                encoded_path.push(Token::FixedBytes(step.fee.to_be_bytes()[1..4].to_vec()));
             }
             
             encoded_path.push(Token::Address(token_out));

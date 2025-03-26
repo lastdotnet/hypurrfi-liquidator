@@ -15,12 +15,17 @@ This is an [Artemis](https://github.com/paradigmxyz/artemis) bot that liquidates
 ```bash
 cd crates/liquidator-contract
 forge install
-forge create ./src/Liquidator.sol:Liquidator --private-key <xyz> --rpc-url <xyz>
+forge create ./src/Liquidator.sol:Liquidator --private-key <xyz> --rpc-url <xyz> --broadcast
 ```
 
-Deployer: 0xE0157B2E81506f7710e62b331eb113B232e89efA
-Deployed to: 0xF508A8523DA51e75a9f0B8516F4cF2694095e04e
-Transaction hash: 0x39a579f8a38a6f8d073bb409385309ec93746887b8747ec863afc7901cbf5f75
+for mainnet verification:
+```bash
+forge create ./src/Liquidator.sol:Liquidator --private-key <xyz> --rpc-url <xyz> --broadcast --verify --verifier sourcify --verifier-url https://sourcify.parsec.finance/verify
+```
+
+Deployer: 0x096f03ae4c33E9C9C0EC0dcbA29645382c38896b
+Deployed to: 0x01cd51e5ed59a2C57AC2339Bac905C2F694C2C19
+Transaction hash: 0x9708c1b67948fb7928dca5cb533a8e75a4790a3204480818fa34f6a5542effe6
 
 4. Build Rust Application
 

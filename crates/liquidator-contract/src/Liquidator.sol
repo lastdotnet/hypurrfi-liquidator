@@ -21,7 +21,7 @@ uint160 constant MIN_SQRT_RATIO = 4295128739;
 /// @dev The maximum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MAX_TICK)
 uint160 constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
-contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3SwapCallback {
+contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3SwapCallback, IERC3156FlashBorrower {
     event LiquidatorSet(address indexed liquidator, bool enabled);
 
     struct SwapCallbackData {
@@ -368,16 +368,21 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
         SwapCallbackData data;
     }
 
+    bytes32 public constant CALLBACK_SUCCESS = keccak256('ERC3156FlashBorrower.onFlashLoan');
+
     /**
      * @notice Callback function called by the flash minter
+     * @param initiator The address that initiated the flash loan
      * @param amount The amount of USDXL borrowed
      * @param fee The fee to be paid for the flash loan
      * @param data Additional data passed to the flash loan
-     * @return success Whether the flash loan was handled successfully
+     * @return success The keccak256 hash of "IERC3156FlashBorrower.onFlashLoan"
      */
-    function executeOperation(uint256 amount, uint256 fee, bytes calldata data) external returns (bool success) {
+    function onFlashLoan(address initiator, address token, uint256 amount, uint256 fee, bytes calldata data) external returns (bytes32 success) {
         // Ensure caller is the flash minter
-        require(msg.sender == address(FLASH_MINTER), "Caller must be flash minter");
+        require(initiator == address(this), "Initiator of onFlashLoan() must be liquidator contract");
+        require(msg.sender == address(FLASH_MINTER), "Msg.sender of onFlashLoan() must be usdxlFlashMinter");
+        require(token == address(USDXL), "Flash loaned token must be USDXL");
 
         // Verify we received the flash loaned amount
         require(USDXL.balanceOf(address(this)) >= amount, "Invalid balance for flash loan");
@@ -410,7 +415,7 @@ contract Liquidator is Owned(msg.sender), IKittenswapSwapCallback, IUniswapV3Swa
         // Approve flash minter to pull repayment
         USDXL.approve(address(FLASH_MINTER), locals.amountToRepay);
 
-        return true;
+        return CALLBACK_SUCCESS;
     }
 
     /// @notice Approve max ERC-20 allowance to Aave pool to save gas and not have to approve every liquidation

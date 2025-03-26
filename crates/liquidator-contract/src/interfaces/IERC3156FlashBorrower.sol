@@ -8,6 +8,9 @@ pragma solidity ^0.8.0;
  * https://eips.ethereum.org/EIPS/eip-3156[ERC-3156].
  *
  * _Available since v4.1._
+ * 
+ * @dev This interface is the IERC3156FlashBorrower.sol interface direct from UsdxlFlashMinter.sol
+ * https://purrsec.com/address/0xd12f1c402197224339d5a324ac7ef4df5d2142e9/contract
  */
 interface IERC3156FlashBorrower {
     /**
@@ -19,7 +22,11 @@ interface IERC3156FlashBorrower {
      * @param data Arbitrary data structure, intended to contain user-defined parameters.
      * @return The keccak256 hash of "IERC3156FlashBorrower.onFlashLoan"
      */
-    function onFlashLoan(address initiator, address token, uint256 amount, uint256 fee, bytes calldata data)
-        external
-        returns (bytes32);
+    function onFlashLoan(
+        address initiator,
+        address token,
+        uint256 amount,
+        uint256 fee,
+        bytes calldata data
+    ) external returns (bytes32);
 }

@@ -7,6 +7,7 @@
  *      The library lets you concatenate, slice and type cast bytes arrays both in memory and storage.
  */
 pragma solidity >=0.8.0 <0.9.0;
+import "forge-std/console.sol";
 
 library BytesLib {
     function concat(bytes memory _preBytes, bytes memory _postBytes) internal pure returns (bytes memory) {
@@ -268,15 +269,18 @@ library BytesLib {
         return tempBytes;
     }
 
+    bytes public constant testBytes = hex"00";
+    // bytes memory testBytes = hex"123456789012345678901234567890123456789001";
+
     function toBool(bytes memory _bytes, uint256 _start) internal pure returns (bool) {
         require(_bytes.length >= _start + 1, "toBool_outOfBounds");
-        bool tempBool;
+        uint8 tempBool;
 
         assembly {
             tempBool := mload(add(add(_bytes, 0x1), _start))
         }
 
-        return tempBool;
+        return (tempBool > uint8(0) ? true : false);
     }
 
     function toAddress(bytes memory _bytes, uint256 _start) internal pure returns (address) {
