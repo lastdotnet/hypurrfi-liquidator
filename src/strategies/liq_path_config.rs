@@ -126,4 +126,57 @@ impl LiqPathConfig {
         let encoded_swap_path = encode_packed(&encoded_path).ok()?;
         Some((Bytes::from(encoded_swap_path), path.liq_path.clone()))
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ethers::types::Address;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_find_path_reversed_tokens() {
+        // Create test addresses
+        let collateral = Address::from_str("0x94e8396e0869c9f2200760af0621afd240e1cf38").unwrap();
+        let debt = Address::from_str("0xca79db4B49f608eF54a5CB813FbEd3a6387bC645").unwrap();
+
+        // Create test config
+        let config_json = r#"[
+            {
+                "collateral": "0x94e8396e0869c9f2200760af0621afd240e1cf38",
+                "debt": "0xca79db4B49f608eF54a5CB813FbEd3a6387bC645",
+                "pair": "wstHYPE-USDXL",
+                "liq_paths": [
+                    {
+                        "liq_path": "kittenswap",
+                        "swap_path": [
+                            {
+                                "swap_venue": "kittenswap",
+                                "pair": "WHYPE-USDXL",
+                                "token_in": "0x94e8396e0869c9f2200760af0621afd240e1cf38",
+                                "token_out": "0xca79db4B49f608eF54a5CB813FbEd3a6387bC645",
+                                "stable": false
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]"#;
+
+        let config: LiqPathConfig = serde_json::from_str(config_json).unwrap();
+
+        // Test normal order
+        let path = config.find_path(&collateral, &debt, "kittenswap");
+        assert!(path.is_some());
+
+        // Test reversed order
+        let reversed_path = config.find_path(&debt, &collateral, "kittenswap");
+        assert!(reversed_path.is_some());
+
+        // Verify both paths found the same config
+        assert_eq!(
+            path.unwrap().liq_path,
+            reversed_path.unwrap().liq_path
+        );
+    }
 } 

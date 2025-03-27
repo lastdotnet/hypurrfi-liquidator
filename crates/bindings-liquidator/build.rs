@@ -14,4 +14,4 @@ fn main() {
 
     // Tell cargo to rerun this script if the ABI file changes
     println!("cargo:rerun-if-changed=./abi/Liquidator.json");
-} 
+}
