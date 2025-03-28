@@ -1,5 +1,6 @@
 use super::types::Config;
 use crate::collectors::time_collector::NewTick;
+use crate::strategies::liq_path_config::LiqPathConfig;
 use anyhow::{anyhow, Result};
 use artemis_core::executors::mempool_executor::{GasBidInfo, SubmitTxToMempool};
 use artemis_core::types::Strategy;
@@ -21,6 +22,7 @@ use ethers::{
     },
 };
 use ethers_contract::Multicall;
+use hex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -29,8 +31,6 @@ use std::iter::zip;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info};
-use crate::strategies::liq_path_config::LiqPathConfig;
-use hex;
 
 use super::types::{Action, Event};
 
@@ -68,10 +68,13 @@ fn get_deployment_config(deployment: Deployment) -> DeploymentConfig {
         Deployment::MOCKNET => DeploymentConfig {
             state_cache_file: "borrowers-mocknet.json".to_string(),
             pool_address: Address::from_str("0x32467b43BFa67273FC7dDda0999Ee9A12F2AaA08").unwrap(),
-            pool_data_provider: Address::from_str("0x0B306BF915C4d645ff596e518fAf3F9669b97016").unwrap(),
-            oracle_address: Address::from_str("0x0E801D84Fa97b50751Dbf25036d067dCf18858bF").unwrap(),
+            pool_data_provider: Address::from_str("0x0B306BF915C4d645ff596e518fAf3F9669b97016")
+                .unwrap(),
+            oracle_address: Address::from_str("0x0E801D84Fa97b50751Dbf25036d067dCf18858bF")
+                .unwrap(),
             whype_address: Address::from_str("0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0").unwrap(),
-            multicall3_address: Address::from_str("0x720472c8ce72c2A2D711333e064ABD3E6BbEAdd3").unwrap(),
+            multicall3_address: Address::from_str("0x720472c8ce72c2A2D711333e064ABD3E6BbEAdd3")
+                .unwrap(),
             usdxl_address: Address::from_str("0xca79db4B49f608eF54a5CB813FbEd3a6387bC645").unwrap(),
             liq_paths_config_file: "liq_paths.json".to_string(),
             default_liq_path: "hyperswap".to_string(),
@@ -80,10 +83,13 @@ fn get_deployment_config(deployment: Deployment) -> DeploymentConfig {
         Deployment::HYFI => DeploymentConfig {
             state_cache_file: "borrowers-hyperevm-mainnet.json".to_string(),
             pool_address: Address::from_str("0xceCcE0EB9DD2Ef7996e01e25DD70e461F918A14b").unwrap(),
-            pool_data_provider: Address::from_str("0x895C799a5bbdCb63B80bEE5BD94E7b9138D977d6").unwrap(),
-            oracle_address: Address::from_str("0x9BE2ac1ff80950DCeb816842834930887249d9A8").unwrap(),
+            pool_data_provider: Address::from_str("0x895C799a5bbdCb63B80bEE5BD94E7b9138D977d6")
+                .unwrap(),
+            oracle_address: Address::from_str("0x9BE2ac1ff80950DCeb816842834930887249d9A8")
+                .unwrap(),
             whype_address: Address::from_str("0x5555555555555555555555555555555555555555").unwrap(),
-            multicall3_address: Address::from_str("0xA66AEb1c0A579Ad95bA3940d18FAad02C368A383").unwrap(),
+            multicall3_address: Address::from_str("0xA66AEb1c0A579Ad95bA3940d18FAad02C368A383")
+                .unwrap(),
             usdxl_address: Address::from_str("0xca79db4B49f608eF54a5CB813FbEd3a6387bC645").unwrap(),
             liq_paths_config_file: "liq_paths.json".to_string(),
             default_liq_path: "kittenswap".to_string(),
@@ -157,7 +163,9 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             chain_id: config.chain_id,
             config: get_deployment_config(deployment),
             liquidator: Address::from_str(&liquidator_address).expect("invalid liquidator address"),
-            pool_state: PoolState { prices: HashMap::new() },
+            pool_state: PoolState {
+                prices: HashMap::new(),
+            },
         }
     }
 }
@@ -267,7 +275,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         info!("Getting multicall");
         let mut multicall = Multicall::new(
             self.write_client.clone(),
-            Some(self.config.multicall3_address.into()), 
+            Some(self.config.multicall3_address.into()),
         )
         .await?;
         info!("Getting borrowers");
@@ -323,7 +331,6 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
     }
 
     fn write_intermediate_cache(&self, block_number: u64) {
-        
         let cache = StateCache {
             last_block_number: block_number,
             borrowers: self.borrowers.clone(),
@@ -347,7 +354,9 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         const BLOCK_CHUNK_SIZE: u64 = 1_000_000;
 
         // Process blocks in 1M chunks
-        for chunk_start in (self.last_block_number..latest_block.as_u64()).step_by(BLOCK_CHUNK_SIZE as usize) {
+        for chunk_start in
+            (self.last_block_number..latest_block.as_u64()).step_by(BLOCK_CHUNK_SIZE as usize)
+        {
             let chunk_end = std::cmp::min(chunk_start + BLOCK_CHUNK_SIZE, latest_block.as_u64());
             // info!(
             //     "Processing borrow logs for blocks {} to {}",
@@ -387,18 +396,20 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
         info!("Getting supply logs");
 
-        for chunk_start in (self.last_block_number..latest_block.as_u64()).step_by(BLOCK_CHUNK_SIZE as usize) {
+        for chunk_start in
+            (self.last_block_number..latest_block.as_u64()).step_by(BLOCK_CHUNK_SIZE as usize)
+        {
             let chunk_end = std::cmp::min(chunk_start + BLOCK_CHUNK_SIZE, latest_block.as_u64());
             info!("Getting supply logs from {} to {}", chunk_start, chunk_end);
             self.get_supply_logs(chunk_start.into(), chunk_end.into())
                 .await?
                 .into_iter()
-            .for_each(|log| {
-                let user = log.on_behalf_of;
-                if self.borrowers.contains_key(&user) {
-                    // info!("Found borrower with collateral {:?}", log.reserve);
-                    self.write_intermediate_cache(chunk_end);
-                    let borrower = self.borrowers.get_mut(&user).unwrap();
+                .for_each(|log| {
+                    let user = log.on_behalf_of;
+                    if self.borrowers.contains_key(&user) {
+                        // info!("Found borrower with collateral {:?}", log.reserve);
+                        self.write_intermediate_cache(chunk_end);
+                        let borrower = self.borrowers.get_mut(&user).unwrap();
                         borrower.collateral.insert(log.reserve);
                     }
                 });
@@ -413,7 +424,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             last_block_number: self.last_block_number,
             borrowers: self.borrowers.clone(),
         };
-        File::create(self.config.state_cache_file.clone())?.write_all(serde_json::to_string(&cache)?.as_bytes())?;
+        File::create(self.config.state_cache_file.clone())?
+            .write_all(serde_json::to_string(&cache)?.as_bytes())?;
 
         Ok(())
     }
@@ -428,7 +440,11 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             .enumerate()
         {
             if i % 100 == 0 {
-                info!("Getting borrow logs from block {} to {}", start_block, start_block + LOG_BLOCK_RANGE - 1);
+                info!(
+                    "Getting borrow logs from block {} to {}",
+                    start_block,
+                    start_block + LOG_BLOCK_RANGE - 1
+                );
             }
             let end_block = std::cmp::min(start_block + LOG_BLOCK_RANGE - 1, to_block.as_u64());
             pool.borrow_filter()
@@ -470,7 +486,6 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         Ok(res)
     }
 
-
     async fn approve_tokens(&mut self) -> Result<()> {
         let liquidator = Liquidator::new(self.liquidator, self.write_client.clone());
 
@@ -511,8 +526,10 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
     async fn update_token_configs(&mut self) -> Result<()> {
         info!("Updating token configs");
-        let pool_data =
-            IPoolDataProvider::<M>::new(self.config.pool_data_provider, self.archive_client.clone());
+        let pool_data = IPoolDataProvider::<M>::new(
+            self.config.pool_data_provider,
+            self.archive_client.clone(),
+        );
         info!("pool_data: {:?}", pool_data);
         let all_tokens = pool_data.get_all_reserves_tokens().await?;
         let all_a_tokens = pool_data.get_all_a_tokens().await?;
@@ -571,7 +588,10 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
                 for debt_address in &borrower_details.debt {
                     // TODO: handle case where collateral and debt are same asset
                     if collateral_address.ne(debt_address) {
-                        info!("borrower: {:?}, collateral: {:?}, debt: {:?}", borrower, collateral_address, debt_address);
+                        info!(
+                            "borrower: {:?}, collateral: {:?}, debt: {:?}",
+                            borrower, collateral_address, debt_address
+                        );
                         if let Some(op) = self
                             .get_liquidation_opportunity(
                                 &borrower,
@@ -613,7 +633,7 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         let whype_address = self.config.whype_address;
 
         let mut path: Vec<Token> = Vec::new();
-        
+
         // Determine the venue and if it's an exact output swap
         let liq_path = if debt.eq(&usdxl_address) {
             "usdxlFlashMinter".to_string()
@@ -640,8 +660,16 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             }
             path.push(Token::Bool(Self::is_stable(
                 &self.pool_state,
-                if exact_out { &whype_address } else { start_token },
-                if exact_out { start_token } else { &whype_address }
+                if exact_out {
+                    &whype_address
+                } else {
+                    start_token
+                },
+                if exact_out {
+                    start_token
+                } else {
+                    &whype_address
+                },
             )?));
             path.push(Token::Address(whype_address));
         }
@@ -652,8 +680,12 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         }
         path.push(Token::Bool(Self::is_stable(
             &self.pool_state,
-            if path.len() > 1 { &whype_address } else { start_token },
-            end_token
+            if path.len() > 1 {
+                &whype_address
+            } else {
+                start_token
+            },
+            end_token,
         )?));
         path.push(Token::Address(*end_token));
 
@@ -672,7 +704,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         .await?;
         info!("multicall init");
         let mut prices = HashMap::new();
-        let price_oracle = IAaveOracle::<M>::new(self.config.oracle_address, self.write_client.clone());
+        let price_oracle =
+            IAaveOracle::<M>::new(self.config.oracle_address, self.write_client.clone());
         info!("price_oracle init");
         for token_address in self.tokens.keys() {
             multicall.add_call(price_oracle.get_asset_price(*token_address), false);
@@ -716,7 +749,10 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
         let collateral_unit = U256::from(10).pow(collateral_config.decimals.into());
         let debt_unit = U256::from(10).pow(debt_config.decimals.into());
         let liquidation_bonus = collateral_config.liquidation_bonus;
-        let a_token = IERC20::new(collateral_config.a_address.clone(), self.write_client.clone());
+        let a_token = IERC20::new(
+            collateral_config.a_address.clone(),
+            self.write_client.clone(),
+        );
 
         let (_, stable_debt, variable_debt, _, _, _, _, _, _) = pool_data
             .get_user_reserve_data(*debt_address, *borrower_address)
@@ -756,7 +792,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
             .get(&final_token)
             .ok_or(anyhow!("No price found for final token"))?;
 
-        op.profit_usd = gain * I256::from_dec_str(&final_token_price.to_string())? / I256::from(PRICE_ONE);
+        op.profit_usd =
+            gain * I256::from_dec_str(&final_token_price.to_string())? / I256::from(PRICE_ONE);
 
         info!(
             "Found opportunity - borrower: {:?}, collateral: {:?}, debt: {:?}, profit_usd: {:?}",
@@ -784,7 +821,8 @@ impl<M: Middleware + 'static> AaveStrategy<M> {
 
         info!("collateral to liquidate: {:?}", op.collateral_to_liquidate);
 
-        info!("liquidator contract args:
+        info!(
+            "liquidator contract args:
 COLLATERAL=0x{}
 DEBT=0x{}
 BORROWER=0x{}
@@ -796,7 +834,8 @@ LIQ_PATH={}",
             hex::encode(op.borrower.clone().as_ref()),
             op.debt_to_cover,
             hex::encode(swap_path.clone().as_ref()),
-            liq_path);
+            liq_path
+        );
 
         let contract_call = liquidator.liquidate(
             op.collateral,
@@ -828,7 +867,7 @@ LIQ_PATH={}",
             .prices
             .get(token_a)
             .ok_or_else(|| anyhow!("No price found for token {}", token_a))?;
-        
+
         let price_b = pool_state
             .prices
             .get(token_b)
