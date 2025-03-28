@@ -1,11 +1,11 @@
 use std::{ops::Mul, sync::Arc};
-use tracing::info;
 
 use anyhow::{Context, Result};
 use artemis_core::executors::mempool_executor::SubmitTxToMempool;
 use artemis_core::types::Executor;
 use async_trait::async_trait;
 use ethers::providers::Middleware;
+use crate::no_log::info;
 
 /// An executor that sends transactions to the mempool.
 pub struct ProtectExecutor<M, N> {

@@ -2,10 +2,12 @@ use anyhow::{anyhow, Result};
 use ethers::types::Address;
 use ethers::abi::{encode_packed, Token};
 use ethers::types::Bytes;
-use log::info;
+use crate::no_log::info;
+use tracing::error;
+
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use log::{error};
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SwapStep {

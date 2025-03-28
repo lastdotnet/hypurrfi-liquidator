@@ -1,3 +1,8 @@
+mod no_log;
+mod strategies;
+mod executors;
+mod collectors;
+
 use anyhow::Result;
 use clap::Parser;
 use std::str::FromStr;
@@ -16,12 +21,8 @@ use strategies::{
     aave_strategy::{AaveStrategy, Deployment},
     types::{Action, Config, Event},
 };
-use tracing::{info, Level};
+use no_log::info;
 use tracing_subscriber::{filter, prelude::*};
-
-pub mod collectors;
-pub mod executors;
-pub mod strategies;
 
 /// CLI Options.
 #[derive(Parser, Debug)]
@@ -58,13 +59,12 @@ pub struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Set up tracing and parse args.
-    let filter = filter::Targets::new()
-        .with_target("artemis_core", Level::INFO)
-        .with_target("aave_v3_liquidator", Level::INFO);
-
+    
+    // This takes the log level from env
+    // RUST_LOG=artemis_orce=INFO,aave_v3_liquidator=INFO
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
-        .with(filter)
+        .with(filter::EnvFilter::from_default_env())
         .init();
 
     let args = Args::parse();
@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
     let write_provider = Arc::new(write_provider.nonce_manager(address).with_signer(wallet.clone()));
 
     // Set up engine.
-    let mut engine: Engine<Event, Action> = Engine::default();
+    let mut engine = Engine::default();
 
     // Set up time collector.
     let time_collector = Box::new(TimeCollector::new(args.poll_interval_secs));

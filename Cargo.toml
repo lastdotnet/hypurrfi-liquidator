@@ -3,6 +3,9 @@ name = "aave-v3-liquidator"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+no-log = []
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -17,7 +20,7 @@ async-trait = "0.1.64"
 futures = "0.3.27"
 anyhow = "1.0.70"
 tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 clap = { version = "4.2.5", features = ["derive"] }
 phyllo = "0.3.0"
 serde = "1.0.168"
