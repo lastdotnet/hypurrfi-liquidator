@@ -1,11 +1,11 @@
 use anyhow::{anyhow, Result};
-use ethers::types::Address;
 use ethers::abi::{encode_packed, Token};
+use ethers::types::Address;
 use ethers::types::Bytes;
+use log::error;
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use log::{error};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SwapStep {
@@ -46,7 +46,7 @@ impl LiqPathConfig {
                     Ok(config) => {
                         info!("read liq path config from file");
                         Ok(config)
-                    },
+                    }
                     Err(e) => {
                         error!("failed to parse liq path config: {}", e);
                         Err(e.into())
@@ -60,25 +60,29 @@ impl LiqPathConfig {
         }
     }
 
-    pub fn find_path(&self, token_in: &Address, token_out: &Address, venue: &str) -> Option<&LiqPath> {
+    pub fn find_path(
+        &self,
+        token_in: &Address,
+        token_out: &Address,
+        venue: &str,
+    ) -> Option<&LiqPath> {
         // Find the path config that matches these tokens
         let path_config = self.0.iter().find(|config| {
-            (config.collateral == *token_in && config.debt == *token_out) ||
-            (config.collateral == *token_out && config.debt == *token_in)
+            (config.collateral == *token_in && config.debt == *token_out)
+                || (config.collateral == *token_out && config.debt == *token_in)
         })?;
 
         // Find and return the entire liq path with the given venue
-        path_config.liq_paths.iter()
-            .find(|p| p.liq_path == venue)
+        path_config.liq_paths.iter().find(|p| p.liq_path == venue)
     }
 
     pub fn build_liq_path(&self, collateral: &Address, debt: &Address) -> Option<(Bytes, String)> {
         info!("building liq path for {:?} and {:?}", collateral, debt);
-        
+
         // Find the path config that matches these tokens
         let path_config = self.0.iter().find(|config| {
-            (config.collateral == *collateral && config.debt == *debt) ||
-            (config.collateral == *debt && config.debt == *collateral)
+            (config.collateral == *collateral && config.debt == *debt)
+                || (config.collateral == *debt && config.debt == *collateral)
         })?;
 
         // Use the highest priority path (first in the list)
@@ -88,10 +92,10 @@ impl LiqPathConfig {
 
         // Build the encoded path from the swap steps
         let mut encoded_path: Vec<Token> = Vec::new();
-        
+
         // Need to reverse the path for exact output venues (kittenswap/hyperswap)
         let is_exact_out = path.liq_path == "kittenswap" || path.liq_path == "hyperswap";
-        
+
         let tokens_reversed = path_config.collateral != *collateral;
         let should_reverse = is_exact_out != tokens_reversed; // XOR - reverse if exactly one is true
 
@@ -112,18 +116,18 @@ impl LiqPathConfig {
             if index == 0 {
                 encoded_path.push(Token::Address(token_in));
             }
-            
+
             if step.swap_venue == "kittenswap" {
                 encoded_path.push(Token::Bool(step.stable));
             } else if step.swap_venue == "hyperswap" {
-                 // fee is a uint24 which is 3 bytes
+                // fee is a uint24 which is 3 bytes
                 encoded_path.push(Token::FixedBytes(step.fee.to_be_bytes()[1..4].to_vec()));
             }
-            
+
             encoded_path.push(Token::Address(token_out));
         }
 
         let encoded_swap_path = encode_packed(&encoded_path).ok()?;
         Some((Bytes::from(encoded_swap_path), path.liq_path.clone()))
     }
-} 
+}

@@ -82,8 +82,16 @@ async fn main() -> Result<()> {
         .with_chain_id(args.chain_id);
     let address = wallet.address();
 
-    let archive_provider = Arc::new(archive_provider.nonce_manager(address).with_signer(wallet.clone()));
-    let write_provider = Arc::new(write_provider.nonce_manager(address).with_signer(wallet.clone()));
+    let archive_provider = Arc::new(
+        archive_provider
+            .nonce_manager(address)
+            .with_signer(wallet.clone()),
+    );
+    let write_provider = Arc::new(
+        write_provider
+            .nonce_manager(address)
+            .with_signer(wallet.clone()),
+    );
 
     // Set up engine.
     let mut engine: Engine<Event, Action> = Engine::default();
@@ -103,11 +111,14 @@ async fn main() -> Result<()> {
         Arc::new(write_provider.clone()),
         config,
         args.deployment,
-        args.liquidator_address
+        args.liquidator_address,
     );
     engine.add_strategy(Box::new(strategy));
 
-    let executor = Box::new(ProtectExecutor::new(write_provider.clone(), write_provider.clone()));
+    let executor = Box::new(ProtectExecutor::new(
+        write_provider.clone(),
+        write_provider.clone(),
+    ));
 
     let executor = ExecutorMap::new(executor, |action| match action {
         Action::SubmitTx(tx) => Some(tx),
@@ -122,7 +133,7 @@ async fn main() -> Result<()> {
                 info!("res: {:?}", res);
             }
         }
-        Err(e) => panic!("Error starting liquidator {}", e)
+        Err(e) => panic!("Error starting liquidator {}", e),
     }
     Ok(())
 }
