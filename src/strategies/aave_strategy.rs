@@ -28,9 +28,9 @@ use std::io::Write;
 use std::iter::zip;
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::error;
+use crate::no_log::{info, debug};
 use crate::strategies::liq_path_config::LiqPathConfig;
-use hex;
 
 use super::types::{Action, Event};
 
